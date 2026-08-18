@@ -62,6 +62,39 @@ async function uploadMultipartToS3(file, upload) {
   return completedParts;
 }
 
+function selectedFileAttachment(file) {
+  return {
+    id: makeId(),
+    kind: file.type.startsWith("image/") ? "image" : "file",
+    name: file.name || "file",
+    contentType: file.type,
+    size: file.size,
+    file,
+  };
+}
+
+function AttachmentTypeIcon({ type }) {
+  if (type === "link") {
+    return (
+      <span className="attachment-type-icon" aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <path d="M10.5 13.5a4.25 4.25 0 0 0 6.01.01l2-2a4.25 4.25 0 0 0-6.01-6.01l-1.14 1.14" />
+          <path d="M13.5 10.5a4.25 4.25 0 0 0-6.01-.01l-2 2a4.25 4.25 0 0 0 6.01 6.01l1.14-1.14" />
+        </svg>
+      </span>
+    );
+  }
+
+  return (
+    <span className="attachment-type-icon" aria-hidden="true">
+      <svg viewBox="0 0 24 24" focusable="false">
+        <path d="M6.5 3.5h7l4 4v13h-11z" />
+        <path d="M13.5 3.5v4h4M9 14h6M9 17h4.5" />
+      </svg>
+    </span>
+  );
+}
+
 export default function Home() {
   const [items, setItems] = useState([]);
   const [accessKey, setAccessKey] = useState("");
@@ -271,14 +304,78 @@ export default function Home() {
     await loadItems(key);
   }
 
-  async function discardPending(pendingItems, key = accessKey) {
-    await Promise.all(pendingItems.filter((item) => item.key).map(async (item) => {
-      try {
-        await callApi(`/api/uploads?key=${encodeURIComponent(item.key)}`, { method: "DELETE" }, key);
-      } catch {
-        // A discarded draft is never saved to the list.
+  async function uploadAttachment(file) {
+    const data = await callApi("/api/uploads", {
+      method: "POST",
+      body: JSON.stringify({
+        action: "initiate",
+        name: file.name,
+        contentType: file.type,
+        size: file.size,
+      }),
+    });
+
+    try {
+      if (data.upload?.mode === "single") {
+        await putFileToS3(data.upload.url, data.upload.headers, file);
+      } else if (data.upload?.mode === "multipart") {
+        const parts = await uploadMultipartToS3(file, data.upload);
+        await callApi("/api/uploads", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "complete",
+            key: data.attachment.key,
+            uploadId: data.upload.uploadId,
+            parts,
+          }),
+        });
+      } else {
+        throw new Error("Upload setup returned an invalid response.");
       }
-    }));
+      return data.attachment;
+    } catch (error) {
+      if (data.upload?.mode === "multipart") {
+        await callApi("/api/uploads", {
+          method: "POST",
+          body: JSON.stringify({
+            action: "abort",
+            key: data.attachment.key,
+            uploadId: data.upload.uploadId,
+          }),
+        }).catch(() => {});
+      } else if (data.attachment?.key) {
+        await callApi(`/api/uploads?key=${encodeURIComponent(data.attachment.key)}`, { method: "DELETE" }).catch(() => {});
+      }
+      throw error;
+    }
+  }
+
+  async function uploadSelectedFiles(attachments) {
+    const uploaded = [];
+    const completed = [];
+    try {
+      for (const attachment of attachments) {
+        if (!attachment.file) {
+          completed.push(attachment);
+          continue;
+        }
+        const storedAttachment = await uploadAttachment(attachment.file);
+        uploaded.push(storedAttachment);
+        completed.push(storedAttachment);
+      }
+      return { attachments: completed, uploaded };
+    } catch (error) {
+      await Promise.allSettled(uploaded.map((attachment) => (
+        callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" })
+      )));
+      throw error;
+    }
+  }
+
+  async function deleteUploadedAttachments(attachments) {
+    await Promise.allSettled(attachments.map((attachment) => (
+      callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" })
+    )));
   }
 
   async function addItem() {
@@ -287,20 +384,26 @@ export default function Home() {
     if (!content && pending.length === 0) return;
 
     setSaving(true);
+    setUploading(pending.some((attachment) => attachment.file));
     setNotice("");
+    let uploaded = [];
     try {
+      const completed = await uploadSelectedFiles(pending);
+      uploaded = completed.uploaded;
       const data = await callApi("/api/items", {
         method: "POST",
-        body: JSON.stringify({ content, attachments: pending }),
+        body: JSON.stringify({ content, attachments: completed.attachments }),
       });
       upsertItem(data.item);
       setDraft("");
       setPending([]);
       setLinkInput("");
     } catch (error) {
+      await deleteUploadedAttachments(uploaded);
       setNotice(error.message);
     } finally {
       setSaving(false);
+      setUploading(false);
     }
   }
 
@@ -319,19 +422,12 @@ export default function Home() {
     setEditLinkInput("");
   }
 
-  async function cancelEdit() {
-    const newAttachments = editAttachments.filter((attachment) => attachment._new);
-    await discardPending(newAttachments);
-    removeAttachmentUrls(newAttachments);
+  function cancelEdit() {
     finishEdit();
   }
 
-  async function removeEditAttachment(attachment) {
+  function removeEditAttachment(attachment) {
     setEditAttachments((current) => current.filter((item) => item.id !== attachment.id));
-    if (attachment._new && attachment.key) {
-      await discardPending([attachment]);
-      removeAttachmentUrls([attachment]);
-    }
   }
 
   async function saveEdit() {
@@ -343,27 +439,34 @@ export default function Home() {
     }
 
     setSaving(true);
+    setUploading(editAttachments.some((attachment) => attachment.file));
     setNotice("");
+    let uploaded = [];
     try {
+      const completed = await uploadSelectedFiles(editAttachments);
+      uploaded = completed.uploaded;
+      const savedAttachments = completed.attachments.map(({ file, _new, ...attachment }) => attachment);
       const data = await callApi("/api/items", {
         method: "PATCH",
         body: JSON.stringify({
           action: "edit-item",
           id: editingItem.id,
           content,
-          attachments: editAttachments.map(({ _new, ...attachment }) => attachment),
+          attachments: savedAttachments,
         }),
       });
       const removedAttachments = editingItem.attachments.filter((attachment) => (
-        attachment.key && !editAttachments.some((next) => next.key === attachment.key)
+        attachment.key && !savedAttachments.some((next) => next.key === attachment.key)
       ));
       removeAttachmentUrls(removedAttachments);
       upsertItem(data.item);
       finishEdit();
     } catch (error) {
+      await deleteUploadedAttachments(uploaded);
       setNotice(error.message);
     } finally {
       setSaving(false);
+      setUploading(false);
     }
   }
 
@@ -378,7 +481,7 @@ export default function Home() {
       });
       removeAttachmentUrls(item.attachments);
       setItems((current) => current.filter((entry) => entry.id !== item.id));
-      if (editingId === item.id) void cancelEdit();
+      if (editingId === item.id) cancelEdit();
     } catch (error) {
       setNotice(error.message);
     } finally {
@@ -386,7 +489,7 @@ export default function Home() {
     }
   }
 
-  async function uploadFiles(event, target = "new") {
+  function selectFiles(event, target = "new") {
     const currentAttachments = target === "edit" ? editAttachments : pending;
     const available = MAX_ATTACHMENTS - currentAttachments.length;
     const selectedFiles = Array.from(event.target.files || []);
@@ -394,72 +497,13 @@ export default function Home() {
     event.target.value = "";
     if (!files.length) return;
 
-    setUploading(true);
     setNotice("");
-    const uploaded = [];
-    try {
-      for (const file of files) {
-        const data = await callApi("/api/uploads", {
-          method: "POST",
-          body: JSON.stringify({
-            action: "initiate",
-            name: file.name,
-            contentType: file.type,
-            size: file.size,
-          }),
-        });
-
-        try {
-          if (data.upload?.mode === "single") {
-            await putFileToS3(data.upload.url, data.upload.headers, file);
-          } else if (data.upload?.mode === "multipart") {
-            const parts = await uploadMultipartToS3(file, data.upload);
-            await callApi("/api/uploads", {
-              method: "POST",
-              body: JSON.stringify({
-                action: "complete",
-                key: data.attachment.key,
-                uploadId: data.upload.uploadId,
-                parts,
-              }),
-            });
-          } else {
-            throw new Error("Upload setup returned an invalid response.");
-          }
-          uploaded.push(data.attachment);
-        } catch (error) {
-          if (data.upload?.mode === "multipart") {
-            await callApi("/api/uploads", {
-              method: "POST",
-              body: JSON.stringify({
-                action: "abort",
-                key: data.attachment.key,
-                uploadId: data.upload.uploadId,
-              }),
-            }).catch(() => {});
-          } else if (data.attachment?.key) {
-            await callApi(`/api/uploads?key=${encodeURIComponent(data.attachment.key)}`, { method: "DELETE" }).catch(() => {});
-          }
-          throw error;
-        }
-      }
-      if (target === "edit") {
-        setEditAttachments((current) => [
-          ...current,
-          ...uploaded.map((attachment) => ({ ...attachment, _new: true })),
-        ]);
-      } else {
-        setPending((current) => [...current, ...uploaded]);
-      }
-      if (available < selectedFiles.length) setNotice("Attachment limit reached.");
-    } catch (error) {
-      await Promise.allSettled(uploaded.map((attachment) => (
-        callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" })
-      )));
-      setNotice(error.message);
-    } finally {
-      setUploading(false);
+    if (target === "edit") {
+      setEditAttachments((current) => [...current, ...files.map(selectedFileAttachment)]);
+    } else {
+      setPending((current) => [...current, ...files.map(selectedFileAttachment)]);
     }
+    if (available < selectedFiles.length) setNotice("Attachment limit reached.");
   }
 
   function addLink(target = "new") {
@@ -488,18 +532,11 @@ export default function Home() {
     }
   }
 
-  async function removePending(attachment) {
+  function removePending(attachment) {
     setPending((current) => current.filter((item) => item.id !== attachment.id));
-    if (!attachment.key) return;
-    try {
-      await callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" });
-    } catch {
-      setNotice("Could not remove file.");
-    }
   }
 
   function lock() {
-    void discardPending(pending);
     localStorage.removeItem(ACCESS_KEY_STORAGE);
     clearAttachmentUrls();
     setAccessKey("");
@@ -507,7 +544,7 @@ export default function Home() {
     setItems([]);
     setDraft("");
     setPending([]);
-    void cancelEdit();
+    cancelEdit();
     setLocked(true);
     setNotice("");
   }
@@ -550,11 +587,11 @@ export default function Home() {
                 {item.content && <p className={editingId === item.id ? "current-content" : ""}>{item.content}</p>}
                 {(editingId === item.id ? editAttachments : item.attachments).length > 0 && <div className="attachments">
                   {(editingId === item.id ? editAttachments : item.attachments).map((attachment) => {
-                    if (attachment.kind === "link") return <a className="link-card" href={attachment.url} key={attachment.id} target="_blank" rel="noreferrer"><span>Link</span><strong>{attachment.name}</strong><small>{attachment.url}</small></a>;
+                    if (attachment.kind === "link") return <a className="link-card" href={attachment.url} key={attachment.id} target="_blank" rel="noreferrer"><AttachmentTypeIcon type="link" /><strong>{attachment.name}</strong><small>{attachment.url}</small></a>;
                     const url = attachmentUrls[attachment.id];
-                    if (attachment.kind === "image") return url ? <a className="image-card" href={url} key={attachment.id} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} /></a> : <div className="file-card" key={attachment.id}>Loading image...</div>;
+                    if (attachment.kind === "image") return url ? <a className="image-card" href={url} key={attachment.id} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} /></a> : <div className="file-card" key={attachment.id}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : "Loading image..."}</small></div>;
                     const downloading = downloadingAttachments[attachment.id];
-                    return <button className="file-card" type="button" key={attachment.id} onClick={() => void downloadAttachment(attachment)} disabled={downloading} aria-label={`Download ${attachment.name}`}><span>File</span><strong>{attachment.name}</strong><small>{downloading ? "Downloading..." : readableSize(attachment.size)}</small></button>;
+                    return <button className="file-card" type="button" key={attachment.id} onClick={() => void downloadAttachment(attachment)} disabled={downloading || !attachment.key} aria-label={attachment.key ? `Download ${attachment.name}` : `${attachment.name} will upload when saved`}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : downloading ? "Downloading..." : readableSize(attachment.size)}</small></button>;
                   })}
                 </div>}
                 {editingId === item.id && (
@@ -562,7 +599,7 @@ export default function Home() {
                     <textarea ref={editTextarea} value={editDraft} maxLength={20_000} onChange={(event) => setEditDraft(event.target.value)} aria-label="Edit note" />
                     {editAttachments.length > 0 && <div className="edit-attachments">{editAttachments.map((attachment) => <span className="edit-chip" key={attachment.id}><span className="chip-type">{attachment.kind === "link" ? "Link" : attachment.kind === "image" ? "Image" : "File"}</span><span className="chip-name">{attachment.name}</span><button type="button" onClick={() => removeEditAttachment(attachment)} aria-label={`Remove ${attachment.name}`}>x</button></span>)}</div>}
                     <div className="edit-tools">
-                      <input ref={editFileInput} type="file" multiple hidden onChange={(event) => uploadFiles(event, "edit")} />
+                      <input ref={editFileInput} type="file" multiple hidden onChange={(event) => selectFiles(event, "edit")} />
                       <button className="button ghost compact science-button" type="button" onClick={() => editFileInput.current?.click()} disabled={uploading || saving}><span className="science-icon atom" aria-hidden="true" />Files</button>
                       <input className="link-input" value={editLinkInput} onChange={(event) => setEditLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink("edit"); } }} placeholder="Paste link" aria-label="Paste link" />
                       <button className="button ghost compact science-button" type="button" onClick={() => addLink("edit")}> <span className="science-icon molecule" aria-hidden="true" />Link</button>
@@ -581,7 +618,7 @@ export default function Home() {
           <textarea value={draft} maxLength={20_000} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); addItem(); } }} placeholder="Write a note..." aria-label="Add a note" />
           <div className="composer-toolbar">
             <div className="attachment-actions">
-              <input ref={fileInput} type="file" multiple hidden onChange={uploadFiles} />
+              <input ref={fileInput} type="file" multiple hidden onChange={selectFiles} />
               <button className="button ghost compact science-button" type="button" onClick={() => fileInput.current?.click()} disabled={uploading || saving} title="Attach files"><span className="science-icon atom" aria-hidden="true" />{uploading ? "Uploading..." : "Files"}</button>
               <input className="link-input" value={linkInput} onChange={(event) => setLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink(); } }} placeholder="Paste link" aria-label="Paste link" />
               <button className="button ghost compact science-button" type="button" onClick={addLink}><span className="science-icon molecule" aria-hidden="true" />Link</button>
