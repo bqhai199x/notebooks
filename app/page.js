@@ -73,10 +73,12 @@ function selectedFileAttachment(file) {
   };
 }
 
-function AttachmentTypeIcon({ type }) {
+function AttachmentTypeIcon({ type, compact = false }) {
+  const className = compact ? "attachment-preview-icon" : "attachment-type-icon";
+
   if (type === "link") {
     return (
-      <span className="attachment-type-icon" aria-hidden="true">
+      <span className={className} aria-hidden="true">
         <svg viewBox="0 0 24 24" focusable="false">
           <path d="M10.5 13.5a4.25 4.25 0 0 0 6.01.01l2-2a4.25 4.25 0 0 0-6.01-6.01l-1.14 1.14" />
           <path d="M13.5 10.5a4.25 4.25 0 0 0-6.01-.01l-2 2a4.25 4.25 0 0 0 6.01 6.01l1.14-1.14" />
@@ -85,8 +87,19 @@ function AttachmentTypeIcon({ type }) {
     );
   }
 
+  if (type === "image") {
+    return (
+      <span className={className} aria-hidden="true">
+        <svg viewBox="0 0 24 24" focusable="false">
+          <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
+          <path d="m5.5 16 4.5-4.5 3 3 2-2 3.5 3.5M8 9.5h.01" />
+        </svg>
+      </span>
+    );
+  }
+
   return (
-    <span className="attachment-type-icon" aria-hidden="true">
+    <span className={className} aria-hidden="true">
       <svg viewBox="0 0 24 24" focusable="false">
         <path d="M6.5 3.5h7l4 4v13h-11z" />
         <path d="M13.5 3.5v4h4M9 14h6M9 17h4.5" />
@@ -107,14 +120,18 @@ export default function Home() {
   const [draft, setDraft] = useState("");
   const [pending, setPending] = useState([]);
   const [linkInput, setLinkInput] = useState("");
+  const [linkInputVisible, setLinkInputVisible] = useState(false);
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState("");
   const [editAttachments, setEditAttachments] = useState([]);
   const [editLinkInput, setEditLinkInput] = useState("");
+  const [editLinkInputVisible, setEditLinkInputVisible] = useState(false);
   const [attachmentUrls, setAttachmentUrls] = useState({});
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
   const fileInput = useRef(null);
   const editFileInput = useRef(null);
+  const linkInputRef = useRef(null);
+  const editLinkInputRef = useRef(null);
   const editTextarea = useRef(null);
   const objectUrls = useRef(new Set());
   const failedAttachments = useRef(new Set());
@@ -398,6 +415,7 @@ export default function Home() {
       setDraft("");
       setPending([]);
       setLinkInput("");
+      setLinkInputVisible(false);
     } catch (error) {
       await deleteUploadedAttachments(uploaded);
       setNotice(error.message);
@@ -412,6 +430,7 @@ export default function Home() {
     setEditDraft(item.content);
     setEditAttachments(item.attachments.map((attachment) => ({ ...attachment })));
     setEditLinkInput("");
+    setEditLinkInputVisible(false);
     setNotice("");
   }
 
@@ -420,6 +439,7 @@ export default function Home() {
     setEditDraft("");
     setEditAttachments([]);
     setEditLinkInput("");
+    setEditLinkInputVisible(false);
   }
 
   function cancelEdit() {
@@ -523,12 +543,43 @@ export default function Home() {
       if (target === "edit") {
         setEditAttachments((current) => [...current, attachment]);
         setEditLinkInput("");
+        setEditLinkInputVisible(false);
       } else {
         setPending((current) => [...current, attachment]);
         setLinkInput("");
+        setLinkInputVisible(false);
       }
     } catch {
       setNotice("Use a valid http(s) link.");
+    }
+  }
+
+  function revealLinkInput(target = "new") {
+    if (target === "edit") {
+      setEditLinkInputVisible(true);
+      requestAnimationFrame(() => editLinkInputRef.current?.focus());
+    } else {
+      setLinkInputVisible(true);
+      requestAnimationFrame(() => linkInputRef.current?.focus());
+    }
+  }
+
+  function handleLinkButton(target = "new") {
+    const visible = target === "edit" ? editLinkInputVisible : linkInputVisible;
+    if (!visible) {
+      revealLinkInput(target);
+      return;
+    }
+    addLink(target);
+  }
+
+  function closeLinkInput(target = "new") {
+    if (target === "edit") {
+      setEditLinkInput("");
+      setEditLinkInputVisible(false);
+    } else {
+      setLinkInput("");
+      setLinkInputVisible(false);
     }
   }
 
@@ -544,6 +595,8 @@ export default function Home() {
     setItems([]);
     setDraft("");
     setPending([]);
+    setLinkInput("");
+    setLinkInputVisible(false);
     cancelEdit();
     setLocked(true);
     setNotice("");
@@ -583,45 +636,49 @@ export default function Home() {
             <article className={`item-card ${editingId === item.id ? "editing" : ""}`} key={item.id}>
               <span className="line-number">{index + 1}</span>
               <div className="item-body">
-                <div className="item-top"><time>{formatDate(item.updatedAt)}</time><div><button className="item-edit" type="button" aria-label="Edit item" onClick={() => startEdit(item)} disabled={saving || editingId === item.id} title="Edit item"><span className="edit-icon" aria-hidden="true" /></button><button className="item-delete" type="button" onClick={() => deleteItem(item)} disabled={saving} title="Delete item">x</button></div></div>
-                {item.content && <p className={editingId === item.id ? "current-content" : ""}>{item.content}</p>}
-                {(editingId === item.id ? editAttachments : item.attachments).length > 0 && <div className="attachments">
-                  {(editingId === item.id ? editAttachments : item.attachments).map((attachment) => {
-                    if (attachment.kind === "link") return <a className="link-card" href={attachment.url} key={attachment.id} target="_blank" rel="noreferrer"><AttachmentTypeIcon type="link" /><strong>{attachment.name}</strong><small>{attachment.url}</small></a>;
-                    const url = attachmentUrls[attachment.id];
-                    if (attachment.kind === "image") return url ? <a className="image-card" href={url} key={attachment.id} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} /></a> : <div className="file-card" key={attachment.id}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : "Loading image..."}</small></div>;
-                    const downloading = downloadingAttachments[attachment.id];
-                    return <button className="file-card" type="button" key={attachment.id} onClick={() => void downloadAttachment(attachment)} disabled={downloading || !attachment.key} aria-label={attachment.key ? `Download ${attachment.name}` : `${attachment.name} will upload when saved`}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : downloading ? "Downloading..." : readableSize(attachment.size)}</small></button>;
-                  })}
-                </div>}
-                {editingId === item.id && (
-                  <div className="edit-area">
-                    <textarea ref={editTextarea} value={editDraft} maxLength={20_000} onChange={(event) => setEditDraft(event.target.value)} aria-label="Edit note" />
-                    {editAttachments.length > 0 && <div className="edit-attachments">{editAttachments.map((attachment) => <span className="edit-chip" key={attachment.id}><span className="chip-type">{attachment.kind === "link" ? "Link" : attachment.kind === "image" ? "Image" : "File"}</span><span className="chip-name">{attachment.name}</span><button type="button" onClick={() => removeEditAttachment(attachment)} aria-label={`Remove ${attachment.name}`}>x</button></span>)}</div>}
-                    <div className="edit-tools">
-                      <input ref={editFileInput} type="file" multiple hidden onChange={(event) => selectFiles(event, "edit")} />
-                      <button className="button ghost compact science-button" type="button" onClick={() => editFileInput.current?.click()} disabled={uploading || saving}><span className="science-icon atom" aria-hidden="true" />Files</button>
-                      <input className="link-input" value={editLinkInput} onChange={(event) => setEditLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink("edit"); } }} placeholder="Paste link" aria-label="Paste link" />
-                      <button className="button ghost compact science-button" type="button" onClick={() => addLink("edit")}> <span className="science-icon molecule" aria-hidden="true" />Link</button>
+                <div className="item-top"><time>{formatDate(item.updatedAt)}</time><div><button className="item-edit" type="button" aria-label="Edit item" onClick={() => startEdit(item)} disabled={saving || editingId === item.id} title="Edit item"><span className="edit-icon" aria-hidden="true" /></button><button className="item-delete" type="button" aria-label="Delete item" onClick={() => deleteItem(item)} disabled={saving} title="Delete item"><svg className="delete-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M9 7V4h6v3M6 7l1 13h10l1-13" /></svg></button></div></div>
+                <div className="item-content">
+                  {item.content && <p className={editingId === item.id ? "current-content" : ""}>{item.content}</p>}
+                  {(editingId === item.id ? editAttachments : item.attachments).length > 0 && <div className="attachments">
+                    {(editingId === item.id ? editAttachments : item.attachments).map((attachment) => {
+                      if (attachment.kind === "link") return <a className="link-card" href={attachment.url} key={attachment.id} target="_blank" rel="noreferrer"><AttachmentTypeIcon type="link" /><strong>{attachment.name}</strong><small>{attachment.url}</small></a>;
+                      const url = attachmentUrls[attachment.id];
+                      if (attachment.kind === "image") return url ? <a className="image-card" href={url} key={attachment.id} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} /></a> : <div className="file-card" key={attachment.id}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : "Loading image..."}</small></div>;
+                      const downloading = downloadingAttachments[attachment.id];
+                      return <button className="file-card" type="button" key={attachment.id} onClick={() => void downloadAttachment(attachment)} disabled={downloading || !attachment.key} aria-label={attachment.key ? `Download ${attachment.name}` : `${attachment.name} will upload when saved`}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : downloading ? "Downloading..." : readableSize(attachment.size)}</small></button>;
+                    })}
+                  </div>}
+                  {editingId === item.id && (
+                    <div className="edit-area">
+                      <textarea ref={editTextarea} value={editDraft} maxLength={20_000} onChange={(event) => setEditDraft(event.target.value)} aria-label="Edit note" />
+                      {editAttachments.length > 0 && <div className="edit-attachments">{editAttachments.map((attachment) => <span className="edit-chip" key={attachment.id}><AttachmentTypeIcon type={attachment.kind} compact /><span className="chip-name">{attachment.name}</span><button type="button" onClick={() => removeEditAttachment(attachment)} aria-label={`Remove ${attachment.name}`}>x</button></span>)}</div>}
+                      <div className="edit-toolbar">
+                        <div className="edit-tools">
+                          <input ref={editFileInput} type="file" multiple hidden onChange={(event) => selectFiles(event, "edit")} />
+                          <button className="button ghost compact science-button" type="button" onClick={() => editFileInput.current?.click()} disabled={uploading || saving}><span className="science-icon atom" aria-hidden="true" />Files</button>
+                          {editLinkInputVisible && <div className="link-input-wrap"><input ref={editLinkInputRef} className="link-input" value={editLinkInput} onChange={(event) => setEditLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink("edit"); } }} placeholder="Paste link" aria-label="Paste link" /><button className="link-input-close" type="button" onClick={() => closeLinkInput("edit")} aria-label="Close link input">×</button></div>}
+                          <button className="button ghost compact science-button" type="button" onClick={() => handleLinkButton("edit")} disabled={uploading || saving} aria-expanded={editLinkInputVisible}><span className="science-icon molecule" aria-hidden="true" />{editLinkInputVisible ? "Add" : "Link"}</button>
+                        </div>
+                        <div className="edit-actions"><button className="button ghost compact" type="button" onClick={() => void cancelEdit()}>Cancel</button><button className="button primary compact" type="button" onClick={saveEdit} disabled={saving || uploading}>Save</button></div>
+                      </div>
                     </div>
-                    <div className="edit-actions"><button className="button ghost compact" type="button" onClick={() => void cancelEdit()}>Cancel</button><button className="button primary compact" type="button" onClick={saveEdit} disabled={saving || uploading}>Save</button></div>
-                  </div>
-                )}
+                  )}
+                </div>
               </div>
             </article>
           ))}
         </div>
 
         <div className="composer">
-          {pending.length > 0 && <div className="pending-attachments">{pending.map((attachment) => <span className="pending-chip" key={attachment.id}><span className="chip-type">{attachment.kind === "link" ? "Link" : attachment.kind === "image" ? "Image" : "File"}</span><span className="chip-name">{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => removePending(attachment)}>x</button></span>)}</div>}
+          {pending.length > 0 && <div className="pending-attachments">{pending.map((attachment) => <span className="pending-chip" key={attachment.id}><AttachmentTypeIcon type={attachment.kind} compact /><span className="chip-name">{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => removePending(attachment)}>x</button></span>)}</div>}
           <div className="composer-label"><span className="science-icon orbit" aria-hidden="true" />New item</div>
           <textarea value={draft} maxLength={20_000} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); addItem(); } }} placeholder="Write a note..." aria-label="Add a note" />
           <div className="composer-toolbar">
             <div className="attachment-actions">
               <input ref={fileInput} type="file" multiple hidden onChange={selectFiles} />
               <button className="button ghost compact science-button" type="button" onClick={() => fileInput.current?.click()} disabled={uploading || saving} title="Attach files"><span className="science-icon atom" aria-hidden="true" />{uploading ? "Uploading..." : "Files"}</button>
-              <input className="link-input" value={linkInput} onChange={(event) => setLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink(); } }} placeholder="Paste link" aria-label="Paste link" />
-              <button className="button ghost compact science-button" type="button" onClick={addLink}><span className="science-icon molecule" aria-hidden="true" />Link</button>
+              {linkInputVisible && <div className="link-input-wrap"><input ref={linkInputRef} className="link-input" value={linkInput} onChange={(event) => setLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink(); } }} placeholder="Paste link" aria-label="Paste link" /><button className="link-input-close" type="button" onClick={() => closeLinkInput()} aria-label="Close link input">×</button></div>}
+              <button className="button ghost compact science-button" type="button" onClick={() => handleLinkButton()} disabled={uploading || saving} aria-expanded={linkInputVisible}><span className="science-icon molecule" aria-hidden="true" />{linkInputVisible ? "Add" : "Link"}</button>
             </div>
             <button className="button primary science-button" type="button" onClick={addItem} disabled={saving || uploading || (!draft.trim() && pending.length === 0)}><span className="science-icon plus" aria-hidden="true" />{saving ? "Saving..." : "Add"}</button>
           </div>

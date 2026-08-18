@@ -47,19 +47,18 @@ h1, h2, p { margin-top: 0; }
 .button.ghost { color: var(--green-dark); background: transparent; }
 .button.compact { min-height: 30px; padding: 0 9px; font-size: 0.74rem; }
 
-.notes-surface { display: flex; min-height: 0; flex: 1; flex-direction: column; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
+.notes-surface { display: grid; min-height: 0; flex: 1; grid-template-rows: minmax(0, 1fr) auto; overflow: hidden; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); box-shadow: var(--shadow); }
 .surface-heading { display: flex; min-height: 66px; align-items: center; justify-content: space-between; gap: 16px; padding: 0 28px; border-bottom: 1px solid var(--line); background: var(--surface); }
 .surface-heading h2 { margin: 0; font-size: 1.1rem; letter-spacing: -0.02em; }
 .surface-heading > span { color: var(--muted); font-size: 0.75rem; }
 .eyebrow { margin-bottom: 4px; color: var(--green-dark); font-size: 0.67rem; font-weight: 800; letter-spacing: 0.13em; }
 
-.items-list { display: grid; min-height: 0; flex: 1; align-content: start; gap: 8px; overflow-x: hidden; overflow-y: auto; padding: 12px 12px 20px; }
-.item-card { display: grid; grid-template-columns: 34px minmax(0, 1fr); min-height: 53px; overflow: visible; border: 1px solid #e7ebe8; border-radius: 9px; background: #fff; }
+.items-list { display: grid; min-height: 0; align-content: start; gap: 8px; overflow-x: hidden; overflow-y: auto; padding: 12px 12px 20px; }
+.item-card { display: grid; min-width: 0; max-height: min(560px, 70dvh); grid-template-columns: 34px minmax(0, 1fr); min-height: 53px; overflow: hidden; border: 1px solid #e7ebe8; border-radius: 9px; background: #fff; }
 .item-card:hover, .item-card.editing { border-color: #c8d9cc; background: var(--surface-soft); }
 .line-number { display: flex; align-self: stretch; justify-content: flex-end; padding: 12px 7px 0 4px; border-right: 1px solid #dde5df; color: #87948b; background: #f1f5f2; font-size: 0.63rem; text-align: right; user-select: none; }
-.item-body { min-width: 0; padding: 10px 8px 13px 11px; }
-.item-top { position: sticky; top: 0; z-index: 1; display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 4px; background: var(--surface); }
-.item-card:hover .item-top, .item-card.editing .item-top { background: var(--surface-soft); }
+.item-body { display: grid; min-width: 0; min-height: 0; grid-template-rows: auto minmax(0, 1fr); padding: 6px 8px 8px 11px; }
+.item-top { display: flex; min-height: 20px; align-items: center; justify-content: space-between; gap: 8px; padding-bottom: 4px; }
 .item-top > div { display: flex; align-items: center; gap: 4px; }
 .item-top time { color: #a0aaa3; font-size: 0.68rem; }
 .item-edit, .item-delete { min-width: 25px; height: 23px; padding: 0 5px; border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 0.7rem; }
@@ -67,29 +66,36 @@ h1, h2, p { margin-top: 0; }
 .edit-icon { position: relative; display: block; width: 12px; height: 12px; transform: rotate(-45deg); }
 .edit-icon::before { position: absolute; top: 3px; left: 2px; width: 10px; height: 5px; content: ""; border: 1.7px solid currentColor; border-radius: 2px; }
 .edit-icon::after { position: absolute; top: 3px; left: -2px; width: 0; height: 0; content: ""; border-top: 3.5px solid transparent; border-bottom: 3.5px solid transparent; border-right: 4px solid currentColor; }
+.delete-icon { display: block; width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
 .item-edit:hover { color: var(--green-dark); background: var(--green-soft); }
 .item-delete:hover { color: #fff; background: var(--red); }
 .item-card p { margin: 2px 20px 0 0; overflow-wrap: anywhere; word-break: break-word; white-space: pre-wrap; font-size: 0.9rem; line-height: 1.6; }
+.item-content { min-width: 0; min-height: 0; overflow-x: hidden; overflow-y: auto; padding-right: 4px; }
 .edit-area { display: grid; gap: 8px; margin-top: 5px; }
 .edit-area textarea { display: block; width: 100%; min-height: 84px; max-height: 320px; padding: 8px; resize: none; overflow-y: auto; border: 1px solid #b8d0be; border-radius: 7px; outline-color: var(--green); color: var(--ink); background: #fff; font-size: 0.88rem; line-height: 1.55; }
 .edit-attachments { display: flex; flex-wrap: wrap; gap: 6px; }
 .edit-chip, .pending-chip { display: inline-flex; max-width: 100%; min-width: 0; align-items: center; gap: 5px; padding: 5px 7px; border: 1px solid #ccdcd0; border-radius: 7px; color: #426c4c; background: #f2f8f3; font-size: 0.72rem; }
-.chip-type { flex: 0 0 auto; color: var(--green-dark); font-weight: 800; }
 .chip-name { min-width: 0; overflow-wrap: anywhere; word-break: break-word; }
 .edit-chip button { width: 18px; height: 18px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; font-size: 0.9rem; line-height: 1; }
 .edit-chip button, .pending-chip button { flex: 0 0 auto; }
 .edit-tools { display: flex; align-items: center; gap: 7px; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 6px; }
+.edit-toolbar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
+.edit-toolbar .edit-tools, .edit-toolbar .edit-actions { display: contents; }
+.edit-toolbar .link-input-wrap { order: -1; grid-column: 1 / -1; width: 100%; }
+.edit-toolbar .button { width: 100%; min-width: 0; justify-content: center; padding: 0 6px; }
 
 .attachments { display: grid; gap: 8px; margin-top: 10px; }
 .image-card { display: block; width: fit-content; max-width: 100%; padding: 4px; background: transparent; }
 .image-card img { display: block; width: auto; max-width: min(100%, 560px); height: auto; max-height: 420px; object-fit: contain; }
-.file-card, .link-card { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 2px 8px; width: min(100%, 370px); min-width: 0; padding: 8px 9px; border: 1px solid #d6e2da; border-radius: 8px; color: #314a3a; background: #f7faf8; text-decoration: none; }
+.file-card, .link-card { display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 2px 6px; width: min(100%, 370px); min-width: 0; padding: 8px 9px; border: 1px solid #d6e2da; border-radius: 8px; color: #314a3a; background: #f7faf8; text-decoration: none; }
 .file-card:hover, .link-card:hover { border-color: #afcbb6; background: #f0f8f2; }
 .file-card { font: inherit; text-align: left; }
 button.file-card { cursor: pointer; }
 .attachment-type-icon { grid-row: span 2; display: grid; align-self: stretch; place-items: center; color: var(--green); }
-.attachment-type-icon svg { display: block; width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.attachment-type-icon svg { display: block; width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.8; }
+.attachment-preview-icon { display: inline-grid; flex: 0 0 13px; place-items: center; color: var(--green-dark); }
+.attachment-preview-icon svg { display: block; width: 13px; height: 13px; fill: none; stroke: currentColor; stroke-linecap: round; stroke-linejoin: round; stroke-width: 1.9; }
 .file-card strong, .link-card strong { min-width: 0; overflow-wrap: anywhere; word-break: break-word; font-size: 0.78rem; }
 .file-card small, .link-card small { min-width: 0; overflow-wrap: anywhere; word-break: break-word; color: var(--muted); font-size: 0.69rem; }
 .empty-state { padding: 18px 0; color: var(--muted); font-size: 0.82rem; }
@@ -102,7 +108,10 @@ button.file-card { cursor: pointer; }
 .composer textarea { display: block; width: 100%; min-height: 72px; padding: 7px 0; resize: none; border: 0; outline: 0; color: var(--ink); background: transparent; font-size: 0.9rem; line-height: 1.55; }
 .composer-toolbar, .attachment-actions { display: flex; align-items: center; gap: 7px; }
 .composer-toolbar { justify-content: space-between; }
-.link-input { width: 145px; min-height: 30px; padding: 0 8px; border: 1px solid var(--line); border-radius: 7px; outline-color: var(--green); background: #fff; font-size: 0.75rem; }
+.link-input-wrap { position: relative; width: 145px; }
+.link-input { display: block; width: 100%; min-height: 30px; padding: 0 30px 0 8px; border: 1px solid var(--line); border-radius: 7px; outline-color: var(--green); background: #fff; font-size: 0.75rem; }
+.link-input-close { position: absolute; top: 50%; right: 3px; display: grid; width: 24px; height: 24px; padding: 0; place-items: center; transform: translateY(-50%); border: 0; border-radius: 5px; color: var(--muted); background: transparent; font-size: 1rem; line-height: 1; }
+.link-input-close:hover { color: var(--red); background: #fff0ee; }
 .science-button { display: inline-flex; align-items: center; gap: 5px; }
 .science-icon { position: relative; display: inline-block; width: 14px; height: 14px; flex: 0 0 auto; }
 .science-icon.atom { border: 1.4px solid var(--green); border-radius: 50%; transform: rotate(-30deg); }
@@ -133,23 +142,25 @@ button.file-card { cursor: pointer; }
 
 @media (max-width: 680px) {
   .app-shell, .unlock-page { width: min(100% - 20px, 860px); }
-  .app-shell { padding: 6px 0 14px 0; }
-  .app-header { min-height: 53px; }
+  .app-shell { padding: 8px; }
+  .app-header { min-height: 45px; }
   .app-brand h1 { font-size: 1.32rem; }
   .notes-surface { border-radius: 12px; }
   .surface-heading { min-height: 57px; padding: 0 17px; }
   .items-list { gap: 7px; padding: 10px 17px 15px; }
   .item-card { grid-template-columns: 29px minmax(0, 1fr); }
+  .item-card { max-height: min(480px, 62dvh); }
   .line-number { padding: 12px 5px 0 3px; font-size: 0.59rem; }
   .item-body { padding-right: 10px; }
   .image-card img { max-height: 305px; }
   .composer { padding: 10px 17px calc(13px + env(safe-area-inset-bottom)); }
+  .composer textarea, .edit-area textarea { font-size: 16px; }
   .composer-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 7px; }
   .attachment-actions { display: contents; }
-  .link-input { order: -1; grid-column: 1 / -1; width: 100%; min-height: 36px; font-size: 16px; }
+  .link-input-wrap { order: -1; grid-column: 1 / -1; width: 100%; }
+  .link-input { min-height: 36px; font-size: 16px; }
   .attachment-actions .button, .composer-toolbar > .button { width: 100%; min-width: 0; min-height: 36px; justify-content: center; padding: 0 6px; }
-  .edit-tools { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 7px; }
-  .edit-tools .button { width: 100%; justify-content: center; }
+  .edit-toolbar { gap: 6px; }
   .button { min-height: 34px; padding: 0 10px; }
   .unlock-card { padding: 28px; }
 }
