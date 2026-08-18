@@ -153,7 +153,7 @@ button.file-card { cursor: pointer; }
   .line-number { padding: 12px 5px 0 3px; font-size: 0.59rem; }
   .item-body { padding-right: 10px; }
   .image-card img { max-height: 305px; }
-  .composer { padding: 10px 12px calc(env(safe-area-inset-bottom) - 10px); }
+  .composer { padding: 10px 17px calc(13px + env(safe-area-inset-bottom)); }
   .composer textarea, .edit-area textarea { font-size: 16px; }
   .composer-toolbar { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: stretch; gap: 7px; }
   .attachment-actions { display: contents; }
@@ -163,4 +163,8 @@ button.file-card { cursor: pointer; }
   .edit-toolbar { gap: 6px; }
   .button { min-height: 34px; padding: 0 10px; }
   .unlock-card { padding: 28px; }
+}
+
+@media (display-mode: standalone) {
+  .composer { padding: 10px 17px calc(env(safe-area-inset-bottom) - 12px); }
 }
