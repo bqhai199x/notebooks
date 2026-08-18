@@ -80,6 +80,6 @@ For housekeeping, add an S3 lifecycle rule that aborts incomplete multipart uplo
 
 ## Deploy
 
-Push `s3-notes` to a Git repository, import it into Vercel, set the variables above, configure the bucket CORS rule, then deploy. A 37 MB `.ipa` uploads directly to S3 and does not pass through Vercel.
+Push `s3-notes` to a Git repository, import it into Vercel, set the variables above, configure the bucket CORS rule, then deploy.
 
 This design is best for a personal list or a small shared group. Multiple simultaneous writers can overwrite each other; use an authenticated database for collaborative editing at scale.
