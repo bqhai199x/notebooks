@@ -79,6 +79,29 @@ function errorResponse(error) {
   return response({ error: "Could not save your notes. Try again." }, 500);
 }
 
+const MAX_RETRIES = 3;
+
+async function modifyItemsWithRetry(mutator) {
+  const { getItemsWithMeta, saveItems } = await import("../../../lib/s3-notes");
+  for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+    const { items, eTag } = await getItemsWithMeta();
+    const result = await mutator(items);
+    if (!result || result.abort) return result;
+    try {
+      await saveItems(result.nextItems, eTag ? { expectedETag: eTag } : {});
+      return result;
+    } catch (error) {
+      const isPreconditionFailed = error?.name === "PreconditionFailed"
+        || error?.$metadata?.httpStatusCode === 412;
+      if (isPreconditionFailed && attempt < MAX_RETRIES - 1) {
+        await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+        continue;
+      }
+      throw error;
+    }
+  }
+}
+
 export async function GET(request) {
   const denied = authorize(request);
   if (denied) return denied;
@@ -101,7 +124,6 @@ export async function POST(request) {
     const itemAttachments = attachments(input.attachments);
     if (!content && itemAttachments.length === 0) return response({ error: "Item is empty." }, 400);
 
-    const { getItems, saveItems } = await import("../../../lib/s3-notes");
     const now = new Date().toISOString();
     const item = {
       id: randomUUID(),
@@ -110,9 +132,12 @@ export async function POST(request) {
       createdAt: now,
       updatedAt: now,
     };
-    const items = await getItems();
-    items.unshift(item);
-    await saveItems(items);
+
+    await modifyItemsWithRetry((items) => {
+      items.unshift(item);
+      return { nextItems: items, item };
+    });
+
     return response({ item }, 201);
   } catch (error) {
     return errorResponse(error);
@@ -129,39 +154,57 @@ export async function PATCH(request) {
       return response({ error: "Invalid request." }, 400);
     }
 
-    const { deleteAttachments, getItems, saveItems } = await import("../../../lib/s3-notes");
-    const items = await getItems();
-    const index = items.findIndex((item) => item.id === input.id);
-    if (index === -1) return response({ error: "Item not found." }, 404);
+    const { deleteAttachments } = await import("../../../lib/s3-notes");
+    let removedAttachmentKeys = [];
+    let updatedItem = null;
 
-    if (input.action === 'delete-item') {
-      const deleted = items[index];
-      await saveItems(items.filter((item) => item.id !== input.id));
-      await deleteAttachments(deleted.attachments.map((attachment) => attachment.key).filter(Boolean));
+    const result = await modifyItemsWithRetry((items) => {
+      const index = items.findIndex((entry) => entry.id === input.id);
+      if (index === -1) {
+        return { abort: true, notFound: true };
+      }
+
+      if (input.action === 'delete-item') {
+        const deleted = items[index];
+        removedAttachmentKeys = deleted.attachments.map((attachment) => attachment.key).filter(Boolean);
+        return { nextItems: items.filter((entry) => entry.id !== input.id), isDelete: true };
+      }
+
+      const content = text(input.content ?? "");
+      const itemAttachments = Array.isArray(input.attachments)
+        ? attachments(input.attachments)
+        : items[index].attachments;
+      if (!content && itemAttachments.length === 0) {
+        return { abort: true, empty: true };
+      }
+
+      const item = {
+        ...items[index],
+        content,
+        attachments: itemAttachments,
+        updatedAt: new Date().toISOString(),
+      };
+      removedAttachmentKeys = items[index].attachments
+        .filter((attachment) => attachment.key && !itemAttachments.some((next) => next.key === attachment.key))
+        .map((attachment) => attachment.key);
+
+      items[index] = item;
+      updatedItem = item;
+      return { nextItems: items, item };
+    });
+
+    if (result?.notFound) return response({ error: "Item not found." }, 404);
+    if (result?.empty) return response({ error: "Item is empty." }, 400);
+
+    if (removedAttachmentKeys.length > 0) {
+      await deleteAttachments(removedAttachmentKeys);
+    }
+
+    if (result?.isDelete) {
       return response({ success: true });
     }
 
-    const content = text(input.content ?? "");
-    const itemAttachments = Array.isArray(input.attachments)
-      ? attachments(input.attachments)
-      : items[index].attachments;
-    if (!content && itemAttachments.length === 0) {
-      return response({ error: "Item is empty." }, 400);
-    }
-
-    const item = {
-      ...items[index],
-      content,
-      attachments: itemAttachments,
-      updatedAt: new Date().toISOString(),
-    };
-    const removedAttachmentKeys = items[index].attachments
-      .filter((attachment) => attachment.key && !itemAttachments.some((next) => next.key === attachment.key))
-      .map((attachment) => attachment.key);
-    items[index] = item;
-    await saveItems(items);
-    await deleteAttachments(removedAttachmentKeys);
-    return response({ item });
+    return response({ item: updatedItem });
   } catch (error) {
     return errorResponse(error);
   }

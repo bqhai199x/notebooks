@@ -1,25 +1,15 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import UnlockCard from "./components/UnlockCard";
+import ItemCard from "./components/ItemCard";
+import ItemComposer from "./components/ItemComposer";
 
 const ACCESS_KEY_STORAGE = "notes-access-key";
 const MAX_ATTACHMENTS = 10;
 
 function makeId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
-}
-
-function formatDate(value) {
-  if (!value) return "";
-  const date = new Date(value);
-  const pad = (number) => String(number).padStart(2, "0");
-  return `${pad(date.getDate())}/${pad(date.getMonth() + 1)}/${date.getFullYear()} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-function readableSize(size) {
-  if (!size) return "";
-  if (size < 1024 * 1024) return `${Math.max(1, Math.round(size / 1024))} KB`;
-  return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
 
 function orderItems(items) {
@@ -73,41 +63,6 @@ function selectedFileAttachment(file) {
   };
 }
 
-function AttachmentTypeIcon({ type, compact = false }) {
-  const className = compact ? "attachment-preview-icon" : "attachment-type-icon";
-
-  if (type === "link") {
-    return (
-      <span className={className} aria-hidden="true">
-        <svg viewBox="0 0 24 24" focusable="false">
-          <path d="M10.5 13.5a4.25 4.25 0 0 0 6.01.01l2-2a4.25 4.25 0 0 0-6.01-6.01l-1.14 1.14" />
-          <path d="M13.5 10.5a4.25 4.25 0 0 0-6.01-.01l-2 2a4.25 4.25 0 0 0 6.01 6.01l1.14-1.14" />
-        </svg>
-      </span>
-    );
-  }
-
-  if (type === "image") {
-    return (
-      <span className={className} aria-hidden="true">
-        <svg viewBox="0 0 24 24" focusable="false">
-          <rect x="3.5" y="4.5" width="17" height="15" rx="2" />
-          <path d="m5.5 16 4.5-4.5 3 3 2-2 3.5 3.5M8 9.5h.01" />
-        </svg>
-      </span>
-    );
-  }
-
-  return (
-    <span className={className} aria-hidden="true">
-      <svg viewBox="0 0 24 24" focusable="false">
-        <path d="M6.5 3.5h7l4 4v13h-11z" />
-        <path d="M13.5 3.5v4h4M9 14h6M9 17h4.5" />
-      </svg>
-    </span>
-  );
-}
-
 export default function Home() {
   const [items, setItems] = useState([]);
   const [accessKey, setAccessKey] = useState("");
@@ -128,12 +83,14 @@ export default function Home() {
   const [editLinkInputVisible, setEditLinkInputVisible] = useState(false);
   const [attachmentUrls, setAttachmentUrls] = useState({});
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
+
   const fileInput = useRef(null);
   const editFileInput = useRef(null);
   const linkInputRef = useRef(null);
   const editLinkInputRef = useRef(null);
   const editTextarea = useRef(null);
   const objectUrls = useRef(new Set());
+  const loadingAttachments = useRef(new Set());
   const failedAttachments = useRef(new Set());
 
   const editingItem = useMemo(
@@ -151,6 +108,7 @@ export default function Home() {
     objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrls.current.clear();
     failedAttachments.current.clear();
+    loadingAttachments.current.clear();
     setAttachmentUrls({});
   }
 
@@ -273,37 +231,51 @@ export default function Home() {
 
   useEffect(() => {
     if (locked || !accessKey) return;
-    let cancelled = false;
-    const missing = [...items.flatMap((item) => item.attachments), ...editAttachments]
-      .filter((attachment) => (
-        attachment.kind === "image"
-        && attachment.key
-        && !attachmentUrls[attachment.id]
-        && !failedAttachments.current.has(attachment.id)
-      ));
+
+    const allAttachments = [
+      ...items.flatMap((item) => item.attachments),
+      ...editAttachments,
+    ];
+
+    const missing = allAttachments.filter((attachment) => (
+      attachment.kind === "image"
+      && attachment.key
+      && !attachmentUrls[attachment.id]
+      && !loadingAttachments.current.has(attachment.id)
+      && !failedAttachments.current.has(attachment.id)
+    ));
 
     if (!missing.length) return;
 
+    missing.forEach((att) => loadingAttachments.current.add(att.id));
+
+    let cancelled = false;
     Promise.all(missing.map(async (attachment) => {
       try {
-        return [attachment.id, await loadAttachment(attachment)];
+        const url = await loadAttachment(attachment);
+        return [attachment.id, url];
       } catch {
         failedAttachments.current.add(attachment.id);
         return null;
+      } finally {
+        loadingAttachments.current.delete(attachment.id);
       }
     })).then((loaded) => {
       if (cancelled) {
         loaded.filter(Boolean).forEach(([, url]) => revokeUrl(url));
         return;
       }
-      setAttachmentUrls((current) => ({
-        ...current,
-        ...Object.fromEntries(loaded.filter(Boolean)),
-      }));
+      const newEntries = loaded.filter(Boolean);
+      if (newEntries.length > 0) {
+        setAttachmentUrls((current) => ({
+          ...current,
+          ...Object.fromEntries(newEntries),
+        }));
+      }
     });
 
     return () => { cancelled = true; };
-  }, [items, editAttachments, accessKey, locked, attachmentUrls]);
+  }, [items, editAttachments, accessKey, locked]);
 
   useEffect(() => {
     const textarea = editTextarea.current;
@@ -604,86 +576,85 @@ export default function Home() {
 
   if (locked) {
     return (
-      <main className="unlock-page">
-        <section className="unlock-card">
-          <div className="brand-mark" aria-hidden="true">*</div>
-          <p className="eyebrow">NOTES</p>
-          <h1>Private notes</h1>
-          <p className="muted">Enter your key to continue.</p>
-          <form onSubmit={unlock} className="unlock-form">
-            <label htmlFor="access-key">Access key</label>
-            <input id="access-key" type="password" autoComplete="current-password" value={accessInput} onChange={(event) => setAccessInput(event.target.value)} placeholder="Your key" required />
-            <button className="button primary" type="submit" disabled={loading}>{loading ? "Opening..." : "Open"}</button>
-          </form>
-          {notice && <p className="form-message">{notice}</p>}
-        </section>
-      </main>
+      <UnlockCard
+        accessInput={accessInput}
+        setAccessInput={setAccessInput}
+        unlock={unlock}
+        loading={loading}
+        notice={notice}
+      />
     );
   }
 
   return (
     <main className="app-shell">
       <header className="app-header">
-        <div className="app-brand"><span className="brand-orbit" aria-hidden="true" /><h1>Notes</h1><small>{items.length} items</small></div>
-        <button className="button ghost" type="button" onClick={lock}>Lock</button>
+        <div className="app-brand">
+          <span className="brand-orbit" aria-hidden="true" />
+          <h1>Notes</h1>
+          <small>{items.length} items</small>
+        </div>
+        <button className="button ghost" type="button" onClick={lock}>
+          Lock
+        </button>
       </header>
 
       <section className="notes-surface">
         <div className="items-list">
           {loading && <p className="empty-state">Loading...</p>}
-          {!loading && items.length === 0 && <div className="empty-items"></div>}
+          {!loading && items.length === 0 && <div className="empty-items" />}
           {items.map((item, index) => (
-            <article className={`item-card ${editingId === item.id ? "editing" : ""}`} key={item.id}>
-              <span className="line-number">{index + 1}</span>
-              <div className="item-body">
-                <div className="item-top"><time>{formatDate(item.updatedAt)}</time><div><button className="item-edit" type="button" aria-label="Edit item" onClick={() => startEdit(item)} disabled={saving || editingId === item.id} title="Edit item"><span className="edit-icon" aria-hidden="true" /></button><button className="item-delete" type="button" aria-label="Delete item" onClick={() => deleteItem(item)} disabled={saving} title="Delete item"><svg className="delete-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6M14 11v6M9 7V4h6v3M6 7l1 13h10l1-13" /></svg></button></div></div>
-                <div className="item-content">
-                  {item.content && <p className={editingId === item.id ? "current-content" : ""}>{item.content}</p>}
-                  {(editingId === item.id ? editAttachments : item.attachments).length > 0 && <div className="attachments">
-                    {(editingId === item.id ? editAttachments : item.attachments).map((attachment) => {
-                      if (attachment.kind === "link") return <a className="link-card" href={attachment.url} key={attachment.id} target="_blank" rel="noreferrer"><AttachmentTypeIcon type="link" /><strong>{attachment.name}</strong><small>{attachment.url}</small></a>;
-                      const url = attachmentUrls[attachment.id];
-                      if (attachment.kind === "image") return url ? <a className="image-card" href={url} key={attachment.id} target="_blank" rel="noreferrer"><img src={url} alt={attachment.name} /></a> : <div className="file-card" key={attachment.id}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : "Loading image..."}</small></div>;
-                      const downloading = downloadingAttachments[attachment.id];
-                      return <button className="file-card" type="button" key={attachment.id} onClick={() => void downloadAttachment(attachment)} disabled={downloading || !attachment.key} aria-label={attachment.key ? `Download ${attachment.name}` : `${attachment.name} will upload when saved`}><AttachmentTypeIcon type="file" /><strong>{attachment.name}</strong><small>{attachment.file ? "Ready to upload" : downloading ? "Downloading..." : readableSize(attachment.size)}</small></button>;
-                    })}
-                  </div>}
-                  {editingId === item.id && (
-                    <div className="edit-area">
-                      <textarea ref={editTextarea} value={editDraft} maxLength={20_000} onChange={(event) => setEditDraft(event.target.value)} aria-label="Edit note" />
-                      {editAttachments.length > 0 && <div className="edit-attachments">{editAttachments.map((attachment) => <span className="edit-chip" key={attachment.id}><AttachmentTypeIcon type={attachment.kind} compact /><span className="chip-name">{attachment.name}</span><button type="button" onClick={() => removeEditAttachment(attachment)} aria-label={`Remove ${attachment.name}`}>x</button></span>)}</div>}
-                      <div className="edit-toolbar">
-                        <div className="edit-tools">
-                          <input ref={editFileInput} type="file" multiple hidden onChange={(event) => selectFiles(event, "edit")} />
-                          <button className="button ghost compact science-button" type="button" onClick={() => editFileInput.current?.click()} disabled={uploading || saving}><span className="science-icon atom" aria-hidden="true" />Files</button>
-                          {editLinkInputVisible && <div className="link-input-wrap"><input ref={editLinkInputRef} className="link-input" value={editLinkInput} onChange={(event) => setEditLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink("edit"); } }} placeholder="Paste link" aria-label="Paste link" /><button className="link-input-close" type="button" onClick={() => closeLinkInput("edit")} aria-label="Close link input">×</button></div>}
-                          <button className="button ghost compact science-button" type="button" onClick={() => handleLinkButton("edit")} disabled={uploading || saving} aria-expanded={editLinkInputVisible}><span className="science-icon molecule" aria-hidden="true" />{editLinkInputVisible ? "Add" : "Link"}</button>
-                        </div>
-                        <div className="edit-actions"><button className="button ghost compact" type="button" onClick={() => void cancelEdit()}>Cancel</button><button className="button primary compact" type="button" onClick={saveEdit} disabled={saving || uploading}>Save</button></div>
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-            </article>
+            <ItemCard
+              key={item.id}
+              item={item}
+              index={index}
+              isEditing={editingId === item.id}
+              saving={saving}
+              uploading={uploading}
+              onStartEdit={startEdit}
+              onDelete={deleteItem}
+              attachmentUrls={attachmentUrls}
+              downloadingAttachments={downloadingAttachments}
+              onDownloadAttachment={downloadAttachment}
+              editDraft={editDraft}
+              setEditDraft={setEditDraft}
+              editAttachments={editAttachments}
+              onRemoveEditAttachment={removeEditAttachment}
+              editFileInputRef={editFileInput}
+              onSelectFiles={selectFiles}
+              editLinkInput={editLinkInput}
+              setEditLinkInput={setEditLinkInput}
+              editLinkInputVisible={editLinkInputVisible}
+              editLinkInputRef={editLinkInputRef}
+              onHandleLinkButton={handleLinkButton}
+              onCloseLinkInput={closeLinkInput}
+              onAddLink={addLink}
+              onCancelEdit={cancelEdit}
+              onSaveEdit={saveEdit}
+              editTextareaRef={editTextarea}
+            />
           ))}
         </div>
 
-        <div className="composer">
-          {pending.length > 0 && <div className="pending-attachments">{pending.map((attachment) => <span className="pending-chip" key={attachment.id}><AttachmentTypeIcon type={attachment.kind} compact /><span className="chip-name">{attachment.name}</span><button type="button" aria-label={`Remove ${attachment.name}`} onClick={() => removePending(attachment)}>x</button></span>)}</div>}
-          <div className="composer-label"><span className="science-icon orbit" aria-hidden="true" />New item</div>
-          <textarea value={draft} maxLength={20_000} onChange={(event) => setDraft(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); addItem(); } }} placeholder="Write a note..." aria-label="Add a note" />
-          <div className="composer-toolbar">
-            <div className="attachment-actions">
-              <input ref={fileInput} type="file" multiple hidden onChange={selectFiles} />
-              <button className="button ghost compact science-button" type="button" onClick={() => fileInput.current?.click()} disabled={uploading || saving} title="Attach files"><span className="science-icon atom" aria-hidden="true" />{uploading ? "Uploading..." : "Files"}</button>
-              {linkInputVisible && <div className="link-input-wrap"><input ref={linkInputRef} className="link-input" value={linkInput} onChange={(event) => setLinkInput(event.target.value)} onKeyDown={(event) => { if (event.key === "Enter") { event.preventDefault(); addLink(); } }} placeholder="Paste link" aria-label="Paste link" /><button className="link-input-close" type="button" onClick={() => closeLinkInput()} aria-label="Close link input">×</button></div>}
-              <button className="button ghost compact science-button" type="button" onClick={() => handleLinkButton()} disabled={uploading || saving} aria-expanded={linkInputVisible}><span className="science-icon molecule" aria-hidden="true" />{linkInputVisible ? "Add" : "Link"}</button>
-            </div>
-            <button className="button primary science-button" type="button" onClick={addItem} disabled={saving || uploading || (!draft.trim() && pending.length === 0)}><span className="science-icon plus" aria-hidden="true" />{saving ? "Saving..." : "Add"}</button>
-          </div>
-          {notice && <p className="composer-message">{notice}</p>}
-        </div>
+        <ItemComposer
+          draft={draft}
+          setDraft={setDraft}
+          pending={pending}
+          onRemovePending={removePending}
+          onAddItem={addItem}
+          saving={saving}
+          uploading={uploading}
+          fileInputRef={fileInput}
+          onSelectFiles={selectFiles}
+          linkInput={linkInput}
+          setLinkInput={setLinkInput}
+          linkInputVisible={linkInputVisible}
+          linkInputRef={linkInputRef}
+          onHandleLinkButton={handleLinkButton}
+          onCloseLinkInput={closeLinkInput}
+          onAddLink={addLink}
+          notice={notice}
+        />
       </section>
     </main>
   );

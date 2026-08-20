@@ -35,16 +35,29 @@ export async function GET(request) {
 
     const { getAttachment } = await import("../../../lib/s3-notes");
     const file = await getAttachment({ key });
+
+    const ifNoneMatch = request.headers.get("if-none-match");
+    if (ifNoneMatch && file.eTag && (ifNoneMatch === file.eTag || ifNoneMatch === `"${file.eTag}"` || ifNoneMatch === file.eTag.replace(/^"|"$/g, ""))) {
+      return new NextResponse(null, {
+        status: 304,
+        headers: {
+          "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+          "ETag": file.eTag,
+        },
+      });
+    }
+
     const stream = typeof file.body.transformToWebStream === "function"
       ? file.body.transformToWebStream()
       : Readable.toWeb(file.body);
 
     return new NextResponse(stream, {
       headers: {
-        "Cache-Control": "private, no-store",
+        "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
         "Content-Type": file.contentType,
         "Content-Disposition": file.contentDisposition || "attachment",
         "X-Content-Type-Options": "nosniff",
+        ...(file.eTag ? { "ETag": file.eTag } : {}),
         ...(file.contentLength ? { "Content-Length": String(file.contentLength) } : {}),
       },
     });
