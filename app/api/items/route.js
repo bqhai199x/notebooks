@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { accessIsConfigured, hasAccess } from "../../../lib/access";
+import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -81,14 +81,14 @@ function errorResponse(error) {
 
 const MAX_RETRIES = 3;
 
-async function modifyItemsWithRetry(mutator) {
+async function modifyItemsWithRetry(mutator, spaceId = null) {
   const { getItemsWithMeta, saveItems } = await import("../../../lib/s3-notes");
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { items, eTag } = await getItemsWithMeta();
+    const { items, eTag } = await getItemsWithMeta(spaceId);
     const result = await mutator(items);
     if (!result || result.abort) return result;
     try {
-      await saveItems(result.nextItems, eTag ? { expectedETag: eTag } : {});
+      await saveItems(result.nextItems, eTag ? { expectedETag: eTag } : {}, spaceId);
       return result;
     } catch (error) {
       const isPreconditionFailed = error?.name === "PreconditionFailed"
@@ -107,8 +107,9 @@ export async function GET(request) {
   if (denied) return denied;
 
   try {
+    const spaceId = getAccessSpace(request);
     const { getItems } = await import("../../../lib/s3-notes");
-    return response({ items: await getItems() });
+    return response({ items: await getItems(spaceId) });
   } catch (error) {
     return errorResponse(error);
   }
@@ -119,6 +120,7 @@ export async function POST(request) {
   if (denied) return denied;
 
   try {
+    const spaceId = getAccessSpace(request);
     const input = await body(request);
     const content = text(input.content ?? "");
     const itemAttachments = attachments(input.attachments);
@@ -136,7 +138,7 @@ export async function POST(request) {
     await modifyItemsWithRetry((items) => {
       items.unshift(item);
       return { nextItems: items, item };
-    });
+    }, spaceId);
 
     return response({ item }, 201);
   } catch (error) {
@@ -149,6 +151,7 @@ export async function PATCH(request) {
   if (denied) return denied;
 
   try {
+    const spaceId = getAccessSpace(request);
     const input = await body(request);
     if (!['edit-item', 'delete-item'].includes(input.action) || typeof input.id !== "string") {
       return response({ error: "Invalid request." }, 400);
@@ -191,13 +194,13 @@ export async function PATCH(request) {
       items[index] = item;
       updatedItem = item;
       return { nextItems: items, item };
-    });
+    }, spaceId);
 
     if (result?.notFound) return response({ error: "Item not found." }, 404);
     if (result?.empty) return response({ error: "Item is empty." }, 400);
 
     if (removedAttachmentKeys.length > 0) {
-      await deleteAttachments(removedAttachmentKeys);
+      await deleteAttachments(removedAttachmentKeys, spaceId);
     }
 
     if (result?.isDelete) {

@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
-import { accessIsConfigured, hasAccess } from "../../../lib/access";
+import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -52,6 +52,7 @@ export async function POST(request) {
   const denied = authorize(request);
   if (denied) return denied;
 
+  const spaceId = getAccessSpace(request);
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return response({ error: "Invalid upload request." }, 400);
 
@@ -71,6 +72,7 @@ export async function POST(request) {
         name: typeof body.name === "string" ? body.name : "file",
         contentType: typeof body.contentType === "string" ? body.contentType : "",
         size,
+        spaceId,
       });
       return response(result, 201);
     }
@@ -81,7 +83,7 @@ export async function POST(request) {
       }
 
       const { completeAttachmentUpload } = await import("../../../lib/s3-notes");
-      await completeAttachmentUpload({ key: body.key, uploadId: body.uploadId, parts: body.parts });
+      await completeAttachmentUpload({ key: body.key, uploadId: body.uploadId, parts: body.parts, spaceId });
       return response({ success: true });
     }
 
@@ -91,7 +93,7 @@ export async function POST(request) {
       }
 
       const { abortAttachmentUpload } = await import("../../../lib/s3-notes");
-      await abortAttachmentUpload({ key: body.key, uploadId: body.uploadId });
+      await abortAttachmentUpload({ key: body.key, uploadId: body.uploadId, spaceId });
       return response({ success: true });
     }
 
@@ -107,11 +109,12 @@ export async function DELETE(request) {
   if (denied) return denied;
 
   try {
+    const spaceId = getAccessSpace(request);
     const key = new URL(request.url).searchParams.get("key");
     if (!key) return response({ error: "Missing file." }, 400);
 
     const { deleteAttachments } = await import("../../../lib/s3-notes");
-    await deleteAttachments([key]);
+    await deleteAttachments([key], spaceId);
     return response({ success: true });
   } catch (error) {
     console.error("Upload cleanup error:", error);

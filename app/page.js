@@ -4,9 +4,13 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import UnlockCard from "./components/UnlockCard";
 import ItemCard from "./components/ItemCard";
 import ItemComposer from "./components/ItemComposer";
+import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
 
 const ACCESS_KEY_STORAGE = "notes-access-key";
 const MAX_ATTACHMENTS = 10;
+const PULL_THRESHOLD = 52;
+const REFRESHING_HEIGHT = 40;
+const MAX_PULL_DISTANCE = 75;
 
 function makeId() {
   return globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`;
@@ -83,15 +87,36 @@ export default function Home() {
   const [editLinkInputVisible, setEditLinkInputVisible] = useState(false);
   const [attachmentUrls, setAttachmentUrls] = useState({});
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
+  const [pullDistance, setPullDistance] = useState(0);
+  const [isPulling, setIsPulling] = useState(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   const fileInput = useRef(null);
   const editFileInput = useRef(null);
   const linkInputRef = useRef(null);
   const editLinkInputRef = useRef(null);
   const editTextarea = useRef(null);
+  const itemsListRef = useRef(null);
   const objectUrls = useRef(new Set());
   const loadingAttachments = useRef(new Set());
   const failedAttachments = useRef(new Set());
+  const dragCounterRef = useRef(0);
+
+  const pullDistanceRef = useRef(0);
+  const isRefreshingRef = useRef(false);
+  const isEditingRef = useRef(false);
+  const savingRef = useRef(false);
+  const uploadingRef = useRef(false);
+  const accessKeyRef = useRef("");
+  const hasVibratedRef = useRef(false);
+
+  pullDistanceRef.current = pullDistance;
+  isRefreshingRef.current = isRefreshing;
+  isEditingRef.current = Boolean(editingId);
+  savingRef.current = saving;
+  uploadingRef.current = uploading;
+  accessKeyRef.current = accessKey;
 
   const editingItem = useMemo(
     () => items.find((item) => item.id === editingId) ?? null,
@@ -153,13 +178,15 @@ export default function Home() {
     ]));
   }
 
-  async function loadItems(key = accessKey) {
+  async function loadItems(key = accessKey, isPull = false) {
     if (!key) {
       setLoading(false);
       return;
     }
 
-    setLoading(true);
+    if (!isPull) {
+      setLoading(true);
+    }
     setNotice("");
     try {
       const data = await callApi("/api/items", {}, key);
@@ -171,6 +198,94 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  useEffect(() => {
+    const container = itemsListRef.current;
+    if (!container || locked) return;
+
+    let startY = 0;
+    let startX = 0;
+    let isTracking = false;
+
+    const handleTouchStart = (e) => {
+      if (e.touches.length !== 1) return;
+      if (isRefreshingRef.current || isEditingRef.current || savingRef.current || uploadingRef.current) return;
+
+      if (container.scrollTop <= 0) {
+        startY = e.touches[0].clientY;
+        startX = e.touches[0].clientX;
+        isTracking = true;
+        hasVibratedRef.current = false;
+      }
+    };
+
+    const handleTouchMove = (e) => {
+      if (!isTracking) return;
+
+      if (container.scrollTop > 0) {
+        isTracking = false;
+        setIsPulling(false);
+        setPullDistance(0);
+        return;
+      }
+
+      const currentY = e.touches[0].clientY;
+      const currentX = e.touches[0].clientX;
+      const deltaY = currentY - startY;
+      const deltaX = currentX - startX;
+
+      if (deltaY > 0 && Math.abs(deltaY) > Math.abs(deltaX)) {
+        if (e.cancelable) {
+          e.preventDefault();
+        }
+        setIsPulling(true);
+        const dampened = Math.min(MAX_PULL_DISTANCE, deltaY * 0.45);
+        setPullDistance(dampened);
+
+        if (dampened >= PULL_THRESHOLD && !hasVibratedRef.current) {
+          hasVibratedRef.current = true;
+          try {
+            navigator.vibrate?.(10);
+          } catch {}
+        }
+      } else if (deltaY < 0) {
+        isTracking = false;
+        setIsPulling(false);
+        setPullDistance(0);
+      }
+    };
+
+    const handleTouchEnd = async () => {
+      if (!isTracking) return;
+      isTracking = false;
+      setIsPulling(false);
+
+      if (pullDistanceRef.current >= PULL_THRESHOLD && !isRefreshingRef.current && accessKeyRef.current) {
+        setIsRefreshing(true);
+        setPullDistance(REFRESHING_HEIGHT);
+        try {
+          await loadItems(accessKeyRef.current, true);
+        } finally {
+          setIsRefreshing(false);
+          setPullDistance(0);
+        }
+      } else {
+        setPullDistance(0);
+      }
+    };
+
+    container.addEventListener("touchstart", handleTouchStart, { passive: true });
+    container.addEventListener("touchmove", handleTouchMove, { passive: false });
+    container.addEventListener("touchend", handleTouchEnd, { passive: true });
+    container.addEventListener("touchcancel", handleTouchEnd, { passive: true });
+
+    return () => {
+      container.removeEventListener("touchstart", handleTouchStart);
+      container.removeEventListener("touchmove", handleTouchMove);
+      container.removeEventListener("touchend", handleTouchEnd);
+      container.removeEventListener("touchcancel", handleTouchEnd);
+    };
+  }, [locked]);
 
   async function loadAttachment(attachment) {
     const query = new URLSearchParams({ key: attachment.key });
@@ -481,22 +596,92 @@ export default function Home() {
     }
   }
 
-  function selectFiles(event, target = "new") {
+  function handleAddFiles(filesList, target = editingId ? "edit" : "new") {
+    const filesArray = Array.from(filesList || []);
+    if (!filesArray.length) return;
+
     const currentAttachments = target === "edit" ? editAttachments : pending;
     const available = MAX_ATTACHMENTS - currentAttachments.length;
-    const selectedFiles = Array.from(event.target.files || []);
-    const files = selectedFiles.slice(0, available);
-    event.target.value = "";
-    if (!files.length) return;
+    if (available <= 0) {
+      setNotice("Attachment limit reached.");
+      return;
+    }
 
+    const files = filesArray.slice(0, available);
     setNotice("");
     if (target === "edit") {
       setEditAttachments((current) => [...current, ...files.map(selectedFileAttachment)]);
     } else {
       setPending((current) => [...current, ...files.map(selectedFileAttachment)]);
     }
-    if (available < selectedFiles.length) setNotice("Attachment limit reached.");
+    if (filesArray.length > available) {
+      setNotice("Attachment limit reached.");
+    }
   }
+
+  function selectFiles(event, target = "new") {
+    handleAddFiles(event.target.files, target);
+    event.target.value = "";
+  }
+
+  useEffect(() => {
+    if (locked) {
+      setIsDraggingFile(false);
+      dragCounterRef.current = 0;
+      return;
+    }
+
+    const hasFiles = (e) => {
+      if (!e.dataTransfer) return false;
+      const types = Array.from(e.dataTransfer.types || []);
+      return types.includes("Files");
+    };
+
+    const handleDragEnter = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounterRef.current += 1;
+      setIsDraggingFile(true);
+    };
+
+    const handleDragOver = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    };
+
+    const handleDragLeave = (e) => {
+      if (!hasFiles(e)) return;
+      dragCounterRef.current -= 1;
+      if (dragCounterRef.current <= 0) {
+        dragCounterRef.current = 0;
+        setIsDraggingFile(false);
+      }
+    };
+
+    const handleDrop = (e) => {
+      if (!hasFiles(e)) return;
+      e.preventDefault();
+      dragCounterRef.current = 0;
+      setIsDraggingFile(false);
+
+      if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+        handleAddFiles(e.dataTransfer.files);
+      }
+    };
+
+    window.addEventListener("dragenter", handleDragEnter);
+    window.addEventListener("dragover", handleDragOver);
+    window.addEventListener("dragleave", handleDragLeave);
+    window.addEventListener("drop", handleDrop);
+
+    return () => {
+      window.removeEventListener("dragenter", handleDragEnter);
+      window.removeEventListener("dragover", handleDragOver);
+      window.removeEventListener("dragleave", handleDragLeave);
+      window.removeEventListener("drop", handleDrop);
+    };
+  }, [locked, editingId, editAttachments, pending]);
 
   function addLink(target = "new") {
     const currentAttachments = target === "edit" ? editAttachments : pending;
@@ -572,6 +757,11 @@ export default function Home() {
     cancelEdit();
     setLocked(true);
     setNotice("");
+    setPullDistance(0);
+    setIsPulling(false);
+    setIsRefreshing(false);
+    setIsDraggingFile(false);
+    dragCounterRef.current = 0;
   }
 
   if (locked) {
@@ -600,7 +790,28 @@ export default function Home() {
       </header>
 
       <section className="notes-surface">
-        <div className="items-list">
+        {isDraggingFile && (
+          <div className="drop-overlay" aria-hidden="true">
+            <div className="drop-overlay-icon">
+              <svg viewBox="0 0 24 24">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+            </div>
+            <div className="drop-overlay-title">Drop files to attach</div>
+            <div className="drop-overlay-subtitle">
+              {editingId ? "Adding to editing note" : "Adding to new note"} (max 10 attachments)
+            </div>
+          </div>
+        )}
+        <div className="items-list" ref={itemsListRef}>
+          <PullToRefreshIndicator
+            pullDistance={pullDistance}
+            threshold={PULL_THRESHOLD}
+            isRefreshing={isRefreshing}
+            isPulling={isPulling}
+          />
           {loading && <p className="empty-state">Loading...</p>}
           {!loading && items.length === 0 && <div className="empty-items" />}
           {items.map((item, index) => (

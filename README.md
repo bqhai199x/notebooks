@@ -8,7 +8,7 @@ Uploads go directly from the device to S3. The app API first verifies the access
 
 ## iPhone and iPad home-screen app
 
-Open the deployed site in Safari, tap **Share**, then choose **Add to Home Screen**. It opens in standalone mode with a dedicated Notes icon, app title, theme color, and safe-area viewport.
+Open the deployed site in Safari, tap **Share**, then choose **Add to Home Screen**. It opens in standalone mode with a dedicated Notes icon, app title, theme color, safe-area viewport, and pull-to-refresh.
 
 ## Local setup
 
@@ -36,7 +36,31 @@ AWS_ACCESS_KEY_ID=...
 AWS_SECRET_ACCESS_KEY=...
 ```
 
-`NOTES_ACCESS_KEY` is the key entered on every device. Use a long, unique value; it is not an AWS password.
+### Single or Multiple Access Keys & Data Spaces
+
+You can configure single or multiple access keys. Each key accesses an isolated data space in S3:
+
+1. **Single key (Default / Legacy)**:
+   ```text
+   NOTES_ACCESS_KEY=my-secret-key
+   ```
+   Uses standard `notes/sessions.json` and `notes/uploads/*`.
+
+2. **Multiple keys with auto-partitioned spaces**:
+   ```text
+   NOTES_ACCESS_KEYS=secretKeyA,secretKeyB,secretKeyC
+   ```
+   Each key gets its own isolated space in S3.
+
+3. **Multiple keys with custom named spaces**:
+   ```text
+   NOTES_ACCESS_KEYS=work:work-secret-123, personal:personal-secret-456
+   ```
+   Or using JSON:
+   ```text
+   NOTES_ACCESS_KEYS={"work-secret-123": "work", "personal-secret-456": "personal"}
+   ```
+   Data is stored under `notes/spaces/<spaceId>/sessions.json` and `notes/spaces/<spaceId>/uploads/*`.
 
 ## Required IAM policy
 
@@ -50,8 +74,7 @@ Replace `your-private-bucket` if needed:
       "Effect": "Allow",
       "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
       "Resource": [
-        "arn:aws:s3:::your-private-bucket/notes/sessions.json",
-        "arn:aws:s3:::your-private-bucket/notes/uploads/*"
+        "arn:aws:s3:::your-private-bucket/notes/*"
       ]
     }
   ]

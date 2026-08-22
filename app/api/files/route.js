@@ -1,6 +1,6 @@
 import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
-import { accessIsConfigured, hasAccess } from "../../../lib/access";
+import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,18 +23,19 @@ export async function GET(request) {
   if (denied) return denied;
 
   try {
+    const spaceId = getAccessSpace(request);
     const search = new URL(request.url).searchParams;
     const key = search.get("key");
     if (!key) return response({ error: "File not found." }, 400);
 
     if (search.get("download") === "1") {
       const { getAttachmentDownloadUrl } = await import("../../../lib/s3-notes");
-      const url = await getAttachmentDownloadUrl({ key });
+      const url = await getAttachmentDownloadUrl({ key, spaceId });
       return response({ url });
     }
 
     const { getAttachment } = await import("../../../lib/s3-notes");
-    const file = await getAttachment({ key });
+    const file = await getAttachment({ key, spaceId });
 
     const ifNoneMatch = request.headers.get("if-none-match");
     if (ifNoneMatch && file.eTag && (ifNoneMatch === file.eTag || ifNoneMatch === `"${file.eTag}"` || ifNoneMatch === file.eTag.replace(/^"|"$/g, ""))) {
