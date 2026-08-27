@@ -97,7 +97,7 @@ h1, h2, p { margin-top: 0; }
 .edit-area { display: grid; gap: 8px; margin-top: 5px; }
 .rich-text { min-width: 0; }
 .rich-text-editor { position: relative; display: flex; height: 250px; min-width: 0; flex-direction: column; margin: 8px 0 12px; overflow: visible; border: 1px solid #b8d0be; border-radius: 10px; background: #fff; }
-.rich-text-editor .ql-toolbar.ql-snow { position: relative; z-index: 3; display: flex; width: 100%; max-width: none; min-width: 0; flex: 0 0 auto; flex-wrap: wrap; align-items: center; gap: 3px; margin: 0; padding: 5px; overflow: visible; border: 0; border-bottom: 1px solid #d9e4dc; border-radius: 9px 9px 0 0; background: #f1f6f2; box-shadow: none; }
+.rich-text-editor .ql-toolbar.ql-snow { position: relative; z-index: 3; display: flex; width: 100%; max-width: none; min-width: 0; flex: 0 0 auto; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 3px; margin: 0; padding: 5px; overflow: visible; border: 0; border-bottom: 1px solid #d9e4dc; border-radius: 9px 9px 0 0; background: #f1f6f2; box-shadow: none; }
 .rich-text-editor .ql-toolbar.ql-snow .ql-formats { display: inline-flex; min-height: 30px; flex: 0 0 auto; align-items: center; gap: 1px; margin: 0; padding: 0 3px; }
 .rich-text-editor .ql-toolbar.ql-snow .ql-formats + .ql-formats { border-inline-start: 1px solid #d9e4dc; }
 .rich-text-editor .ql-toolbar.ql-snow button, .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label { display: grid; float: none; width: 30px; height: 30px; padding: 3px; place-items: center; border: 0; border-radius: 9px; }
@@ -213,14 +213,16 @@ button.file-card { cursor: pointer; }
   .line-number { padding: 12px 5px 0 3px; font-size: 0.59rem; }
   .item-body { padding-right: 10px; }
   .image-card img { max-height: 305px; }
-  .composer { padding: 10px 17px calc(13px + env(safe-area-inset-bottom)); }
-  .composer-collapsed { padding-top: 7px; padding-bottom: calc(7px + env(safe-area-inset-bottom)); }
+  .composer { padding: 10px 17px 13px; }
+  .composer-collapsed { padding-top: 7px; padding-bottom: 7px; }
   .rich-text-editor { height: 280px; }
   .rich-text-editor .ql-editor { font-size: 16px; }
   .rich-text-editor .ql-toolbar.ql-snow { gap: 2px; padding: 4px; border-radius: 13px 13px 0 0; }
   .rich-text-editor .ql-toolbar.ql-snow .ql-formats { padding: 0 2px; }
-  .rich-text-editor .ql-toolbar.ql-snow button, .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label, .rich-text-editor .ql-toolbar.ql-snow .ql-picker { width: 32px; height: 32px; }
-  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header { width: 108px; }
+  .rich-text-editor .ql-toolbar.ql-snow button, .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label, .rich-text-editor .ql-toolbar.ql-snow .ql-picker { width: 26px; height: 26px; }
+  .rich-text-editor .ql-toolbar.ql-snow button svg, .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label svg { width: 14px; height: 14px; }
+  .rich-text-editor .ql-toolbar.ql-snow button.ql-file svg, .rich-text-editor .ql-toolbar.ql-snow button.ql-collapse svg { width: 14px; height: 14px; }
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header { width: 100px; }
   .rich-text-editor .ql-toolbar.ql-snow .ql-picker-options { max-width: calc(100vw - 32px); }
   .rich-text-viewer .ql-editor { padding-right: 4px; }
   .rich-text .ql-editor img.ql-s3-image { max-height: 305px; }
@@ -238,8 +240,8 @@ button.file-card { cursor: pointer; }
 @media (max-height: 560px) {
   .app-shell { padding-top: 8px; padding-bottom: 8px; }
   .app-header { min-height: 45px; }
-  .composer { padding: 8px 14px calc(8px + env(safe-area-inset-bottom)); }
-  .composer-collapsed { padding-top: 6px; padding-bottom: calc(6px + env(safe-area-inset-bottom)); }
+  .composer { padding: 8px 14px; }
+  .composer-collapsed { padding-top: 6px; padding-bottom: 6px; }
   .rich-text-editor { margin: 4px 0 6px; }
   .rich-text-editor .ql-toolbar.ql-snow { padding: 4px; }
   .rich-text-editor { height: 190px; }
@@ -247,8 +249,4 @@ button.file-card { cursor: pointer; }
 
 @media (max-width: 680px) and (max-height: 560px) {
   .rich-text-editor { height: 230px; }
-}
-
-@media (display-mode: standalone) {
-  .composer { padding-bottom: calc(13px + env(safe-area-inset-bottom)); }
 }
