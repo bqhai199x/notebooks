@@ -1,10 +1,12 @@
 # Notes
 
-A responsive private list app for desktop and mobile. One flat list contains notes, files, images, and links.
+A responsive private list app for desktop and mobile. One flat list contains rich-text notes, files, images, and links.
 
 Attachments are stored until their item is deleted. The browser retrieves each attachment through the authenticated app API, so there are no expiring attachment links in the UI.
 
 Uploads go directly from the device to S3. The app API first verifies the access key and issues a short-lived signed URL, so Vercel Functions never receive the file body. Files larger than 16 MB use S3 multipart upload automatically.
+
+Notes use Quill. Images added from its toolbar, paste, or drag-and-drop are represented by an attachment ID in the stored Quill Delta; the editor never stores Base64, blob URLs, or expiring signed URLs. A temporary browser blob preview is used before saving, then the original file is uploaded directly to S3 with the same attachment pipeline as regular files.
 
 ## iPhone and iPad home-screen app
 

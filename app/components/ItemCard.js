@@ -2,6 +2,8 @@
 
 import AttachmentList from "./AttachmentList";
 import AttachmentTypeIcon from "./AttachmentTypeIcon";
+import RichTextEditor from "./RichTextEditor";
+import { inlineImageAttachmentIds, richTextForDisplay } from "../../lib/rich-text";
 
 function formatDate(value) {
   if (!value) return "";
@@ -14,6 +16,7 @@ export default function ItemCard({
   item,
   index,
   isEditing,
+  reordering,
   saving,
   uploading,
   onStartEdit,
@@ -25,34 +28,36 @@ export default function ItemCard({
   setEditDraft,
   editAttachments,
   onRemoveEditAttachment,
-  editFileInputRef,
   onSelectFiles,
-  editLinkInput,
-  setEditLinkInput,
-  editLinkInputVisible,
-  editLinkInputRef,
-  onHandleLinkButton,
-  onCloseLinkInput,
-  onAddLink,
   onCancelEdit,
   onSaveEdit,
-  editTextareaRef,
+  onSelectInlineImages,
 }) {
-  const displayedAttachments = isEditing ? editAttachments : item.attachments;
+  const itemContent = richTextForDisplay(item.content, item.contentFormat);
+  const inlineImageIds = inlineImageAttachmentIds(itemContent);
+  const displayedAttachments = item.attachments
+    .filter((attachment) => !inlineImageIds.has(attachment.id));
 
   return (
-    <article className={`item-card ${isEditing ? "editing" : ""}`}>
-      <span className="line-number">{index + 1}</span>
+    <article className={`item-card ${isEditing ? "editing" : ""}`} data-item-id={item.id}>
+      <span
+        className={`line-number item-drag-handle${isEditing || reordering ? " disabled" : ""}`}
+        title="Drag to reorder"
+      >
+        {index + 1}
+      </span>
       <div className="item-body">
         <div className="item-top">
-          <time>{formatDate(item.updatedAt)}</time>
+          <div className="item-meta">
+            <time>{formatDate(item.updatedAt)}</time>
+          </div>
           <div>
             <button
               className="item-edit"
               type="button"
               aria-label="Edit item"
               onClick={() => onStartEdit(item)}
-              disabled={saving || isEditing}
+              disabled={saving || isEditing || reordering}
               title="Edit item"
             >
               <span className="edit-icon" aria-hidden="true" />
@@ -62,7 +67,7 @@ export default function ItemCard({
               type="button"
               aria-label="Delete item"
               onClick={() => onDelete(item)}
-              disabled={saving}
+              disabled={saving || reordering}
               title="Delete item"
             >
               <svg className="delete-icon" viewBox="0 0 24 24" aria-hidden="true">
@@ -73,27 +78,38 @@ export default function ItemCard({
         </div>
 
         <div className="item-content">
-          {item.content && (
-            <p className={isEditing ? "current-content" : ""}>{item.content}</p>
-          )}
+          {!isEditing && (
+            <>
+              {item.content && (
+                <RichTextEditor
+                  value={itemContent}
+                  imageUrls={attachmentUrls}
+                  readOnly
+                  ariaLabel="Note content"
+                />
+              )}
 
-          {displayedAttachments.length > 0 && (
-            <AttachmentList
-              attachments={displayedAttachments}
-              attachmentUrls={attachmentUrls}
-              downloadingAttachments={downloadingAttachments}
-              onDownload={onDownloadAttachment}
-            />
+              {displayedAttachments.length > 0 && (
+                <AttachmentList
+                  attachments={displayedAttachments}
+                  attachmentUrls={attachmentUrls}
+                  downloadingAttachments={downloadingAttachments}
+                  onDownload={onDownloadAttachment}
+                />
+              )}
+            </>
           )}
 
           {isEditing && (
             <div className="edit-area">
-              <textarea
-                ref={editTextareaRef}
+              <RichTextEditor
                 value={editDraft}
-                maxLength={20_000}
-                onChange={(event) => setEditDraft(event.target.value)}
-                aria-label="Edit note"
+                onChange={setEditDraft}
+                onSelectImages={onSelectInlineImages}
+                onSelectFiles={onSelectFiles}
+                imageUrls={attachmentUrls}
+                disabled={saving || uploading}
+                ariaLabel="Edit note"
               />
               {editAttachments.length > 0 && (
                 <div className="edit-attachments">
@@ -112,78 +128,22 @@ export default function ItemCard({
                   ))}
                 </div>
               )}
-              <div className="edit-toolbar">
-                <div className="edit-tools">
-                  <input
-                    ref={editFileInputRef}
-                    type="file"
-                    multiple
-                    hidden
-                    onChange={(event) => onSelectFiles(event, "edit")}
-                  />
-                  <button
-                    className="button ghost compact science-button"
-                    type="button"
-                    onClick={() => editFileInputRef.current?.click()}
-                    disabled={uploading || saving}
-                  >
-                    <span className="science-icon atom" aria-hidden="true" />
-                    Files
-                  </button>
-                  {editLinkInputVisible && (
-                    <div className="link-input-wrap">
-                      <input
-                        ref={editLinkInputRef}
-                        className="link-input"
-                        value={editLinkInput}
-                        onChange={(event) => setEditLinkInput(event.target.value)}
-                        onKeyDown={(event) => {
-                          if (event.key === "Enter") {
-                            event.preventDefault();
-                            onAddLink("edit");
-                          }
-                        }}
-                        placeholder="Paste link"
-                        aria-label="Paste link"
-                      />
-                      <button
-                        className="link-input-close"
-                        type="button"
-                        onClick={() => onCloseLinkInput("edit")}
-                        aria-label="Close link input"
-                      >
-                        ×
-                      </button>
-                    </div>
-                  )}
-                  <button
-                    className="button ghost compact science-button"
-                    type="button"
-                    onClick={() => onHandleLinkButton("edit")}
-                    disabled={uploading || saving}
-                    aria-expanded={editLinkInputVisible}
-                  >
-                    <span className="science-icon molecule" aria-hidden="true" />
-                    {editLinkInputVisible ? "Add" : "Link"}
-                  </button>
-                </div>
-                <div className="edit-actions">
-                  <button
-                    className="button ghost compact"
-                    type="button"
-                    onClick={onCancelEdit}
-                  >
-                    Cancel
-                  </button>
-                  <button
-                    className="button primary compact"
-                    type="button"
-                    onClick={onSaveEdit}
-                    disabled={saving || uploading}
-                  >
-                    Save
-                  </button>
-                </div>
+              <div className="edit-actions">
+                <button
+                  className="button ghost compact"
+                  type="button"
+                  onClick={onCancelEdit}
+                >
+                  Cancel
+                </button>
+                <button
+                  className="button primary compact"
+                  type="button"
+                  onClick={onSaveEdit}
+                  disabled={saving || uploading}
+                >
+                  Save
+                </button>
               </div>
             </div>
           )}

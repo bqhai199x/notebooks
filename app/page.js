@@ -5,6 +5,16 @@ import UnlockCard from "./components/UnlockCard";
 import ItemCard from "./components/ItemCard";
 import ItemComposer from "./components/ItemComposer";
 import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
+import {
+  emptyRichText,
+  inlineImageAttachmentIds,
+  QUILL_DELTA_FORMAT,
+  removeInlineImages,
+  replaceInlineImageAttachmentIds,
+  richTextForDisplay,
+  richTextHasText,
+  serializeQuillDelta,
+} from "../lib/rich-text";
 
 const ACCESS_KEY_STORAGE = "notes-access-key";
 const MAX_ATTACHMENTS = 10;
@@ -17,7 +27,31 @@ function makeId() {
 }
 
 function orderItems(items) {
-  return [...items].sort((a, b) => new Date(b.updatedAt) - new Date(a.updatedAt));
+  return Array.isArray(items) ? [...items] : [];
+}
+
+function itemsInOrder(items, ids) {
+  const itemsById = new Map(items.map((item) => [item.id, item]));
+  const usedIds = new Set();
+  const ordered = [];
+
+  ids.forEach((id) => {
+    const item = itemsById.get(id);
+    if (item && !usedIds.has(id)) {
+      ordered.push(item);
+      usedIds.add(id);
+    }
+  });
+
+  items.forEach((item) => {
+    if (!usedIds.has(item.id)) ordered.push(item);
+  });
+
+  return ordered;
+}
+
+function sameItemOrder(left, right) {
+  return left.length === right.length && left.every((item, index) => item.id === right[index]?.id);
 }
 
 async function putFileToS3(url, headers, body) {
@@ -56,7 +90,7 @@ async function uploadMultipartToS3(file, upload) {
   return completedParts;
 }
 
-function selectedFileAttachment(file) {
+function selectedFileAttachment(file, inline = false) {
   return {
     id: makeId(),
     kind: file.type.startsWith("image/") ? "image" : "file",
@@ -64,7 +98,13 @@ function selectedFileAttachment(file) {
     contentType: file.type,
     size: file.size,
     file,
+    ...(inline ? { _inline: true } : {}),
   };
+}
+
+function persistedAttachment(attachment) {
+  const { file, _inline, ...value } = attachment;
+  return value;
 }
 
 export default function Home() {
@@ -75,16 +115,14 @@ export default function Home() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [reordering, setReordering] = useState(false);
   const [notice, setNotice] = useState("");
-  const [draft, setDraft] = useState("");
+  const [draft, setDraft] = useState(() => emptyRichText());
   const [pending, setPending] = useState([]);
-  const [linkInput, setLinkInput] = useState("");
-  const [linkInputVisible, setLinkInputVisible] = useState(false);
+  const [composerExpanded, setComposerExpanded] = useState(false);
   const [editingId, setEditingId] = useState(null);
-  const [editDraft, setEditDraft] = useState("");
+  const [editDraft, setEditDraft] = useState(() => emptyRichText());
   const [editAttachments, setEditAttachments] = useState([]);
-  const [editLinkInput, setEditLinkInput] = useState("");
-  const [editLinkInputVisible, setEditLinkInputVisible] = useState(false);
   const [attachmentUrls, setAttachmentUrls] = useState({});
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
   const [pullDistance, setPullDistance] = useState(0);
@@ -92,22 +130,22 @@ export default function Home() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
 
-  const fileInput = useRef(null);
-  const editFileInput = useRef(null);
-  const linkInputRef = useRef(null);
-  const editLinkInputRef = useRef(null);
-  const editTextarea = useRef(null);
   const itemsListRef = useRef(null);
+  const itemsRef = useRef([]);
   const objectUrls = useRef(new Set());
   const loadingAttachments = useRef(new Set());
   const failedAttachments = useRef(new Set());
   const dragCounterRef = useRef(0);
+  const pendingRef = useRef([]);
+  const editAttachmentsRef = useRef([]);
+  const discardedInlineAttachments = useRef({ new: new Map(), edit: new Map() });
 
   const pullDistanceRef = useRef(0);
   const isRefreshingRef = useRef(false);
   const isEditingRef = useRef(false);
   const savingRef = useRef(false);
   const uploadingRef = useRef(false);
+  const reorderingRef = useRef(false);
   const accessKeyRef = useRef("");
   const hasVibratedRef = useRef(false);
 
@@ -117,6 +155,10 @@ export default function Home() {
   savingRef.current = saving;
   uploadingRef.current = uploading;
   accessKeyRef.current = accessKey;
+  itemsRef.current = items;
+  pendingRef.current = pending;
+  editAttachmentsRef.current = editAttachments;
+  reorderingRef.current = reordering;
 
   const editingItem = useMemo(
     () => items.find((item) => item.id === editingId) ?? null,
@@ -149,6 +191,88 @@ export default function Home() {
     });
   }
 
+  function attachmentsForTarget(target) {
+    return target === "edit" ? editAttachmentsRef.current : pendingRef.current;
+  }
+
+  function discardedAttachmentsForTarget(target) {
+    return discardedInlineAttachments.current[target === "edit" ? "edit" : "new"];
+  }
+
+  function setAttachmentsForTarget(target, nextAttachments) {
+    if (target === "edit") {
+      editAttachmentsRef.current = nextAttachments;
+      setEditAttachments(nextAttachments);
+    } else {
+      pendingRef.current = nextAttachments;
+      setPending(nextAttachments);
+    }
+  }
+
+  function attachmentsUsedByContent(attachments, content) {
+    const inlineIds = inlineImageAttachmentIds(content);
+    return attachments.filter((attachment) => !attachment._inline || inlineIds.has(attachment.id));
+  }
+
+  function removeUnusedInlineAttachments(target, content) {
+    const inlineIds = inlineImageAttachmentIds(content);
+    const current = attachmentsForTarget(target);
+    const removed = current.filter((attachment) => attachment._inline && !inlineIds.has(attachment.id));
+    const discarded = discardedAttachmentsForTarget(target);
+    removed.forEach((attachment) => discarded.set(attachment.id, attachment));
+
+    const restored = [...inlineIds]
+      .filter((attachmentId) => !current.some((attachment) => attachment.id === attachmentId))
+      .map((attachmentId) => discarded.get(attachmentId))
+      .filter(Boolean);
+    restored.forEach((attachment) => discarded.delete(attachment.id));
+
+    if (removed.length || restored.length) {
+      setAttachmentsForTarget(target, [
+        ...current.filter((attachment) => !removed.includes(attachment)),
+        ...restored,
+      ]);
+    }
+  }
+
+  function handleRichTextChange(content, target = "new") {
+    if (target === "edit") {
+      setEditDraft(content);
+    } else {
+      setDraft(content);
+    }
+    removeUnusedInlineAttachments(target, content);
+  }
+
+  function addInlineImages(filesList, target = "new") {
+    const files = Array.from(filesList || []).filter((file) => file?.type?.startsWith("image/"));
+    if (!files.length) return [];
+
+    if (target === "new") {
+      setComposerExpanded(true);
+    }
+
+    const current = attachmentsForTarget(target);
+    const available = MAX_ATTACHMENTS - current.length;
+    if (available <= 0) {
+      setNotice("Attachment limit reached.");
+      return [];
+    }
+
+    const attachments = files.slice(0, available).map((file) => selectedFileAttachment(file, true));
+    const imagePreviews = {};
+    attachments.forEach((attachment) => {
+      const previewUrl = URL.createObjectURL(attachment.file);
+      objectUrls.current.add(previewUrl);
+      imagePreviews[attachment.id] = previewUrl;
+    });
+
+    setAttachmentsForTarget(target, [...current, ...attachments]);
+    setAttachmentUrls((currentUrls) => ({ ...currentUrls, ...imagePreviews }));
+    setNotice(files.length > available ? "Attachment limit reached." : "");
+    return attachments;
+  }
+
   async function callApi(path, options = {}, key = accessKey) {
     const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
     const response = await fetch(path, {
@@ -172,10 +296,14 @@ export default function Home() {
   }
 
   function upsertItem(nextItem) {
-    setItems((current) => orderItems([
-      nextItem,
-      ...current.filter((item) => item.id !== nextItem.id),
-    ]));
+    setItems((current) => {
+      const currentIndex = current.findIndex((item) => item.id === nextItem.id);
+      const nextItems = currentIndex === -1
+        ? [nextItem, ...current]
+        : current.map((item) => (item.id === nextItem.id ? nextItem : item));
+      itemsRef.current = nextItems;
+      return nextItems;
+    });
   }
 
   async function loadItems(key = accessKey, isPull = false) {
@@ -190,7 +318,9 @@ export default function Home() {
     setNotice("");
     try {
       const data = await callApi("/api/items", {}, key);
-      setItems(orderItems(data.items));
+      const nextItems = orderItems(data.items);
+      itemsRef.current = nextItems;
+      setItems(nextItems);
       setLocked(false);
     } catch (error) {
       setNotice(error.message);
@@ -198,6 +328,96 @@ export default function Home() {
       setLoading(false);
     }
   }
+
+  async function persistItemOrder(itemId, orderedIds) {
+    if (
+      savingRef.current
+      || uploadingRef.current
+      || isEditingRef.current
+      || reorderingRef.current
+    ) return;
+
+    const previousItems = itemsRef.current;
+    const nextItems = itemsInOrder(previousItems, orderedIds);
+    if (!nextItems.some((item) => item.id === itemId) || sameItemOrder(previousItems, nextItems)) {
+      return;
+    }
+
+    const movedItemIndex = nextItems.findIndex((item) => item.id === itemId);
+    const beforeId = nextItems[movedItemIndex + 1]?.id ?? null;
+    reorderingRef.current = true;
+    itemsRef.current = nextItems;
+    setReordering(true);
+    setItems(nextItems);
+    setNotice("");
+
+    try {
+      const data = await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({ action: "reorder-item", id: itemId, beforeId }),
+      });
+      const savedItems = Array.isArray(data.items) ? orderItems(data.items) : nextItems;
+      itemsRef.current = savedItems;
+      setItems(savedItems);
+    } catch (error) {
+      itemsRef.current = previousItems;
+      setItems(previousItems);
+      setNotice(error.message || "Could not save the new note order.");
+    } finally {
+      reorderingRef.current = false;
+      setReordering(false);
+    }
+  }
+
+  useEffect(() => {
+    const container = itemsListRef.current;
+    if (
+      !container
+      || locked
+      || items.length < 2
+      || editingId
+      || saving
+      || uploading
+      || reordering
+    ) {
+      return undefined;
+    }
+
+    let disposed = false;
+    let sortable = null;
+
+    async function attachSortable() {
+      const module = await import("sortablejs");
+      if (disposed) return;
+
+      const Sortable = module.default;
+      sortable = new Sortable(container, {
+        animation: 150,
+        draggable: ".item-card[data-item-id]",
+        handle: ".item-drag-handle",
+        ghostClass: "item-card-sortable-ghost",
+        chosenClass: "item-card-sortable-chosen",
+        dragClass: "item-card-sortable-drag",
+        delay: 120,
+        delayOnTouchOnly: true,
+        touchStartThreshold: 4,
+        fallbackOnBody: true,
+        onEnd(event) {
+          const itemId = event.item?.dataset.itemId;
+          const orderedIds = Array.from(container.querySelectorAll(".item-card[data-item-id]"))
+            .map((element) => element.dataset.itemId)
+            .filter(Boolean);
+          if (itemId) void persistItemOrder(itemId, orderedIds);
+        },
+      });
+    }
+
+    void attachSortable();
+    return () => {
+      disposed = true;
+      sortable?.destroy();
+    };
+  }, [locked, items.length, editingId, saving, uploading, reordering]);
 
   useEffect(() => {
     const container = itemsListRef.current;
@@ -210,6 +430,7 @@ export default function Home() {
     const handleTouchStart = (e) => {
       if (e.touches.length !== 1) return;
       if (isRefreshingRef.current || isEditingRef.current || savingRef.current || uploadingRef.current) return;
+      if (e.target instanceof Element && e.target.closest(".item-drag-handle")) return;
 
       if (container.scrollTop <= 0) {
         startY = e.touches[0].clientY;
@@ -392,13 +613,6 @@ export default function Home() {
     return () => { cancelled = true; };
   }, [items, editAttachments, accessKey, locked]);
 
-  useEffect(() => {
-    const textarea = editTextarea.current;
-    if (!textarea || !editingId) return;
-    textarea.style.height = "auto";
-    textarea.style.height = `${Math.min(textarea.scrollHeight, 320)}px`;
-  }, [editingId, editDraft]);
-
   async function unlock(event) {
     event.preventDefault();
     const key = accessInput.trim();
@@ -460,14 +674,20 @@ export default function Home() {
     try {
       for (const attachment of attachments) {
         if (!attachment.file) {
-          completed.push(attachment);
+          completed.push({ sourceId: attachment.id, attachment });
           continue;
         }
         const storedAttachment = await uploadAttachment(attachment.file);
         uploaded.push(storedAttachment);
-        completed.push(storedAttachment);
+        completed.push({
+          sourceId: attachment.id,
+          attachment: {
+            ...storedAttachment,
+            ...(attachment._inline ? { _inline: true } : {}),
+          },
+        });
       }
-      return { attachments: completed, uploaded };
+      return { completed, uploaded };
     } catch (error) {
       await Promise.allSettled(uploaded.map((attachment) => (
         callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" })
@@ -484,25 +704,40 @@ export default function Home() {
 
   async function addItem() {
     if (saving || uploading) return;
-    const content = draft.trim();
-    if (!content && pending.length === 0) return;
+    const activeAttachments = attachmentsUsedByContent(pendingRef.current, draft);
+    if (!richTextHasText(draft) && activeAttachments.length === 0) return;
 
     setSaving(true);
-    setUploading(pending.some((attachment) => attachment.file));
+    setUploading(activeAttachments.some((attachment) => attachment.file));
     setNotice("");
     let uploaded = [];
     try {
-      const completed = await uploadSelectedFiles(pending);
-      uploaded = completed.uploaded;
+      const uploadResult = await uploadSelectedFiles(activeAttachments);
+      uploaded = uploadResult.uploaded;
+      const attachmentIds = new Map(uploadResult.completed.map(({ sourceId, attachment }) => [sourceId, attachment.id]));
+      const savedContent = replaceInlineImageAttachmentIds(draft, attachmentIds);
+      const savedImageIds = inlineImageAttachmentIds(savedContent);
+      const savedAttachments = uploadResult.completed
+        .map(({ attachment }) => attachment)
+        .filter((attachment) => !attachment._inline || savedImageIds.has(attachment.id))
+        .map(persistedAttachment);
       const data = await callApi("/api/items", {
         method: "POST",
-        body: JSON.stringify({ content, attachments: completed.attachments }),
+        body: JSON.stringify({
+          content: serializeQuillDelta(savedContent),
+          contentFormat: QUILL_DELTA_FORMAT,
+          attachments: savedAttachments,
+        }),
       });
       upsertItem(data.item);
-      setDraft("");
-      setPending([]);
-      setLinkInput("");
-      setLinkInputVisible(false);
+      removeAttachmentUrls([
+        ...activeAttachments,
+        ...discardedAttachmentsForTarget("new").values(),
+      ].filter((attachment) => attachment.file));
+      setDraft(emptyRichText());
+      setAttachmentsForTarget("new", []);
+      discardedAttachmentsForTarget("new").clear();
+      setComposerExpanded(false);
     } catch (error) {
       await deleteUploadedAttachments(uploaded);
       setNotice(error.message);
@@ -513,20 +748,28 @@ export default function Home() {
   }
 
   function startEdit(item) {
+    const content = richTextForDisplay(item.content, item.contentFormat);
+    const inlineImageIds = inlineImageAttachmentIds(content);
     setEditingId(item.id);
-    setEditDraft(item.content);
-    setEditAttachments(item.attachments.map((attachment) => ({ ...attachment })));
-    setEditLinkInput("");
-    setEditLinkInputVisible(false);
+    setComposerExpanded(false);
+    setEditDraft(content);
+    discardedAttachmentsForTarget("edit").clear();
+    setAttachmentsForTarget("edit", item.attachments.map((attachment) => ({
+      ...attachment,
+      ...(inlineImageIds.has(attachment.id) ? { _inline: true } : {}),
+    })));
     setNotice("");
   }
 
   function finishEdit() {
+    removeAttachmentUrls([
+      ...editAttachmentsRef.current,
+      ...discardedAttachmentsForTarget("edit").values(),
+    ].filter((attachment) => attachment.file));
+    discardedAttachmentsForTarget("edit").clear();
     setEditingId(null);
-    setEditDraft("");
-    setEditAttachments([]);
-    setEditLinkInput("");
-    setEditLinkInputVisible(false);
+    setEditDraft(emptyRichText());
+    setAttachmentsForTarget("edit", []);
   }
 
   function cancelEdit() {
@@ -534,31 +777,44 @@ export default function Home() {
   }
 
   function removeEditAttachment(attachment) {
-    setEditAttachments((current) => current.filter((item) => item.id !== attachment.id));
+    const current = editAttachmentsRef.current;
+    setAttachmentsForTarget("edit", current.filter((item) => item.id !== attachment.id));
+    discardedAttachmentsForTarget("edit").delete(attachment.id);
+    if (attachment._inline) {
+      setEditDraft((content) => removeInlineImages(content, [attachment.id]));
+    }
+    removeAttachmentUrls([attachment]);
   }
 
   async function saveEdit() {
     if (!editingItem || saving) return;
-    const content = editDraft.trim();
-    if (!content && editAttachments.length === 0) {
+    const activeAttachments = attachmentsUsedByContent(editAttachmentsRef.current, editDraft);
+    if (!richTextHasText(editDraft) && activeAttachments.length === 0) {
       setNotice("Item is empty.");
       return;
     }
 
     setSaving(true);
-    setUploading(editAttachments.some((attachment) => attachment.file));
+    setUploading(activeAttachments.some((attachment) => attachment.file));
     setNotice("");
     let uploaded = [];
     try {
-      const completed = await uploadSelectedFiles(editAttachments);
-      uploaded = completed.uploaded;
-      const savedAttachments = completed.attachments.map(({ file, _new, ...attachment }) => attachment);
+      const uploadResult = await uploadSelectedFiles(activeAttachments);
+      uploaded = uploadResult.uploaded;
+      const attachmentIds = new Map(uploadResult.completed.map(({ sourceId, attachment }) => [sourceId, attachment.id]));
+      const savedContent = replaceInlineImageAttachmentIds(editDraft, attachmentIds);
+      const savedImageIds = inlineImageAttachmentIds(savedContent);
+      const savedAttachments = uploadResult.completed
+        .map(({ attachment }) => attachment)
+        .filter((attachment) => !attachment._inline || savedImageIds.has(attachment.id))
+        .map(persistedAttachment);
       const data = await callApi("/api/items", {
         method: "PATCH",
         body: JSON.stringify({
           action: "edit-item",
           id: editingItem.id,
-          content,
+          content: serializeQuillDelta(savedContent),
+          contentFormat: QUILL_DELTA_FORMAT,
           attachments: savedAttachments,
         }),
       });
@@ -566,6 +822,7 @@ export default function Home() {
         attachment.key && !savedAttachments.some((next) => next.key === attachment.key)
       ));
       removeAttachmentUrls(removedAttachments);
+      removeAttachmentUrls(activeAttachments.filter((attachment) => attachment.file));
       upsertItem(data.item);
       finishEdit();
     } catch (error) {
@@ -587,7 +844,11 @@ export default function Home() {
         body: JSON.stringify({ action: "delete-item", id: item.id }),
       });
       removeAttachmentUrls(item.attachments);
-      setItems((current) => current.filter((entry) => entry.id !== item.id));
+      setItems((current) => {
+        const nextItems = current.filter((entry) => entry.id !== item.id);
+        itemsRef.current = nextItems;
+        return nextItems;
+      });
       if (editingId === item.id) cancelEdit();
     } catch (error) {
       setNotice(error.message);
@@ -600,7 +861,11 @@ export default function Home() {
     const filesArray = Array.from(filesList || []);
     if (!filesArray.length) return;
 
-    const currentAttachments = target === "edit" ? editAttachments : pending;
+    if (target === "new") {
+      setComposerExpanded(true);
+    }
+
+    const currentAttachments = attachmentsForTarget(target);
     const available = MAX_ATTACHMENTS - currentAttachments.length;
     if (available <= 0) {
       setNotice("Attachment limit reached.");
@@ -609,19 +874,10 @@ export default function Home() {
 
     const files = filesArray.slice(0, available);
     setNotice("");
-    if (target === "edit") {
-      setEditAttachments((current) => [...current, ...files.map(selectedFileAttachment)]);
-    } else {
-      setPending((current) => [...current, ...files.map(selectedFileAttachment)]);
-    }
+    setAttachmentsForTarget(target, [...currentAttachments, ...files.map(selectedFileAttachment)]);
     if (filesArray.length > available) {
       setNotice("Attachment limit reached.");
     }
-  }
-
-  function selectFiles(event, target = "new") {
-    handleAddFiles(event.target.files, target);
-    event.target.value = "";
   }
 
   useEffect(() => {
@@ -683,65 +939,14 @@ export default function Home() {
     };
   }, [locked, editingId, editAttachments, pending]);
 
-  function addLink(target = "new") {
-    const currentAttachments = target === "edit" ? editAttachments : pending;
-    const input = target === "edit" ? editLinkInput : linkInput;
-    if (currentAttachments.length >= MAX_ATTACHMENTS) {
-      setNotice("Attachment limit reached.");
-      return;
-    }
-    const rawUrl = input.trim();
-    if (!rawUrl) return;
-
-    try {
-      const url = new URL(rawUrl);
-      if (!["http:", "https:"].includes(url.protocol)) throw new Error();
-      const attachment = { id: makeId(), kind: "link", url: url.toString(), name: url.hostname };
-      if (target === "edit") {
-        setEditAttachments((current) => [...current, attachment]);
-        setEditLinkInput("");
-        setEditLinkInputVisible(false);
-      } else {
-        setPending((current) => [...current, attachment]);
-        setLinkInput("");
-        setLinkInputVisible(false);
-      }
-    } catch {
-      setNotice("Use a valid http(s) link.");
-    }
-  }
-
-  function revealLinkInput(target = "new") {
-    if (target === "edit") {
-      setEditLinkInputVisible(true);
-      requestAnimationFrame(() => editLinkInputRef.current?.focus());
-    } else {
-      setLinkInputVisible(true);
-      requestAnimationFrame(() => linkInputRef.current?.focus());
-    }
-  }
-
-  function handleLinkButton(target = "new") {
-    const visible = target === "edit" ? editLinkInputVisible : linkInputVisible;
-    if (!visible) {
-      revealLinkInput(target);
-      return;
-    }
-    addLink(target);
-  }
-
-  function closeLinkInput(target = "new") {
-    if (target === "edit") {
-      setEditLinkInput("");
-      setEditLinkInputVisible(false);
-    } else {
-      setLinkInput("");
-      setLinkInputVisible(false);
-    }
-  }
-
   function removePending(attachment) {
-    setPending((current) => current.filter((item) => item.id !== attachment.id));
+    const current = pendingRef.current;
+    setAttachmentsForTarget("new", current.filter((item) => item.id !== attachment.id));
+    discardedAttachmentsForTarget("new").delete(attachment.id);
+    if (attachment._inline) {
+      setDraft((content) => removeInlineImages(content, [attachment.id]));
+    }
+    removeAttachmentUrls([attachment]);
   }
 
   function lock() {
@@ -749,11 +954,14 @@ export default function Home() {
     clearAttachmentUrls();
     setAccessKey("");
     setAccessInput("");
+    itemsRef.current = [];
     setItems([]);
-    setDraft("");
-    setPending([]);
-    setLinkInput("");
-    setLinkInputVisible(false);
+    reorderingRef.current = false;
+    setReordering(false);
+    setDraft(emptyRichText());
+    setAttachmentsForTarget("new", []);
+    discardedAttachmentsForTarget("new").clear();
+    setComposerExpanded(false);
     cancelEdit();
     setLocked(true);
     setNotice("");
@@ -813,13 +1021,20 @@ export default function Home() {
             isPulling={isPulling}
           />
           {loading && <p className="empty-state">Loading...</p>}
-          {!loading && items.length === 0 && <div className="empty-items" />}
+          {!loading && items.length === 0 && (
+            <div className="empty-items">
+              <span className="empty-items-icon" aria-hidden="true" />
+              <h2>No notes yet</h2>
+              <p>Use the toolbar below to format text, add links, and attach files or images.</p>
+            </div>
+          )}
           {items.map((item, index) => (
             <ItemCard
               key={item.id}
               item={item}
               index={index}
               isEditing={editingId === item.id}
+              reordering={reordering}
               saving={saving}
               uploading={uploading}
               onStartEdit={startEdit}
@@ -828,42 +1043,30 @@ export default function Home() {
               downloadingAttachments={downloadingAttachments}
               onDownloadAttachment={downloadAttachment}
               editDraft={editDraft}
-              setEditDraft={setEditDraft}
+              setEditDraft={(content) => handleRichTextChange(content, "edit")}
               editAttachments={editAttachments}
               onRemoveEditAttachment={removeEditAttachment}
-              editFileInputRef={editFileInput}
-              onSelectFiles={selectFiles}
-              editLinkInput={editLinkInput}
-              setEditLinkInput={setEditLinkInput}
-              editLinkInputVisible={editLinkInputVisible}
-              editLinkInputRef={editLinkInputRef}
-              onHandleLinkButton={handleLinkButton}
-              onCloseLinkInput={closeLinkInput}
-              onAddLink={addLink}
+              onSelectFiles={(files) => handleAddFiles(files, "edit")}
               onCancelEdit={cancelEdit}
               onSaveEdit={saveEdit}
-              editTextareaRef={editTextarea}
+              onSelectInlineImages={(files) => addInlineImages(files, "edit")}
             />
           ))}
         </div>
 
         <ItemComposer
+          expanded={composerExpanded}
+          onExpandedChange={setComposerExpanded}
           draft={draft}
-          setDraft={setDraft}
+          setDraft={(content) => handleRichTextChange(content, "new")}
           pending={pending}
           onRemovePending={removePending}
           onAddItem={addItem}
+          onSelectInlineImages={(files) => addInlineImages(files, "new")}
+          attachmentUrls={attachmentUrls}
           saving={saving}
           uploading={uploading}
-          fileInputRef={fileInput}
-          onSelectFiles={selectFiles}
-          linkInput={linkInput}
-          setLinkInput={setLinkInput}
-          linkInputVisible={linkInputVisible}
-          linkInputRef={linkInputRef}
-          onHandleLinkButton={handleLinkButton}
-          onCloseLinkInput={closeLinkInput}
-          onAddLink={addLink}
+          onSelectFiles={(files) => handleAddFiles(files, "new")}
           notice={notice}
         />
       </section>
