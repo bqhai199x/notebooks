@@ -130,124 +130,6 @@ const FORMATS = [
   "s3Image",
 ];
 
-function setupPickerPortals(toolbarContainer) {
-  if (!toolbarContainer) return () => {};
-
-  let portalContainer = document.getElementById("ql-picker-portal-container");
-  if (!portalContainer) {
-    portalContainer = document.createElement("div");
-    portalContainer.id = "ql-picker-portal-container";
-    portalContainer.className = "ql-snow";
-    document.body.appendChild(portalContainer);
-  }
-
-  const pickers = toolbarContainer.querySelectorAll(".ql-picker");
-  const cleanups = [];
-
-  pickers.forEach((picker) => {
-    const label = picker.querySelector(".ql-picker-label");
-    const options = picker.querySelector(".ql-picker-options");
-    if (!label || !options) return;
-
-    const isAlign = picker.classList.contains("ql-align") || picker.classList.contains("ql-icon-picker");
-    let portalWrapper = null;
-
-    const closePortal = () => {
-      picker.classList.remove("ql-expanded");
-    };
-
-    const handleOutsideInteraction = (e) => {
-      if (!options.contains(e.target) && !label.contains(e.target)) {
-        closePortal();
-      }
-    };
-
-    const positionOptions = () => {
-      const rect = label.getBoundingClientRect();
-      const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-      const viewportTop = window.visualViewport ? window.visualViewport.offsetTop : 0;
-      const spaceBelow = (viewportHeight + viewportTop) - rect.bottom;
-
-      if (spaceBelow < 220) {
-        options.style.top = "auto";
-        options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
-      } else {
-        options.style.top = `${rect.bottom + 4}px`;
-        options.style.bottom = "auto";
-      }
-
-      const targetWidth = isAlign ? 38 : 130;
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - targetWidth - 8));
-      options.style.left = `${left}px`;
-      options.style.right = "auto";
-    };
-
-    const observer = new MutationObserver(() => {
-      const isExpanded = picker.classList.contains("ql-expanded");
-
-      if (isExpanded) {
-        // Create wrapper matching picker classes so all Quill CSS selectors match!
-        portalWrapper = document.createElement("span");
-        portalWrapper.className = picker.className;
-        portalWrapper.classList.add("ql-picker-portal-wrapper");
-
-        portalContainer.appendChild(portalWrapper);
-        portalWrapper.appendChild(options);
-
-        options.style.display = "block";
-        positionOptions();
-
-        document.addEventListener("touchstart", handleOutsideInteraction, { passive: true });
-        document.addEventListener("mousedown", handleOutsideInteraction);
-        window.addEventListener("resize", positionOptions);
-        window.visualViewport?.addEventListener("resize", positionOptions);
-      } else {
-        if (options.parentNode && options.parentNode !== picker) {
-          picker.appendChild(options);
-        }
-        if (portalWrapper && portalWrapper.parentNode) {
-          portalWrapper.remove();
-          portalWrapper = null;
-        }
-        options.style.top = "";
-        options.style.bottom = "";
-        options.style.left = "";
-        options.style.right = "";
-        options.style.position = "";
-        options.style.zIndex = "";
-        options.style.display = "";
-
-        document.removeEventListener("touchstart", handleOutsideInteraction);
-        document.removeEventListener("mousedown", handleOutsideInteraction);
-        window.removeEventListener("resize", positionOptions);
-        window.visualViewport?.removeEventListener("resize", positionOptions);
-      }
-    });
-
-    observer.observe(picker, { attributes: true, attributeFilter: ["class"] });
-    toolbarContainer.addEventListener("scroll", closePortal, { passive: true });
-
-    cleanups.push(() => {
-      observer.disconnect();
-      toolbarContainer.removeEventListener("scroll", closePortal);
-      document.removeEventListener("touchstart", handleOutsideInteraction);
-      document.removeEventListener("mousedown", handleOutsideInteraction);
-      window.removeEventListener("resize", positionOptions);
-      window.visualViewport?.removeEventListener("resize", positionOptions);
-      if (options.parentNode && options.parentNode !== picker) {
-        picker.appendChild(options);
-      }
-      if (portalWrapper && portalWrapper.parentNode) {
-        portalWrapper.remove();
-      }
-    });
-  });
-
-  return () => {
-    cleanups.forEach((cleanup) => cleanup());
-  };
-}
-
 export default function RichTextEditor({
   value,
   onChange,
@@ -406,7 +288,7 @@ export default function RichTextEditor({
       };
       editor.root.addEventListener("drop", stopImageDrop);
 
-      // Suppress keyboard popup on toolbar / dropdown interaction
+      // Suppress keyboard popup on toolbar interaction
       let suppressFocus = false;
       let suppressTimer = null;
 
@@ -415,7 +297,7 @@ export default function RichTextEditor({
         if (suppressTimer) clearTimeout(suppressTimer);
         suppressTimer = setTimeout(() => {
           suppressFocus = false;
-        }, 500);
+        }, 400);
       };
 
       const toolbarContainer = editor.getModule("toolbar")?.container;
@@ -423,13 +305,6 @@ export default function RichTextEditor({
         toolbarContainer.addEventListener("touchstart", triggerSuppress, { passive: true, capture: true });
         toolbarContainer.addEventListener("mousedown", triggerSuppress, { capture: true });
         toolbarContainer.addEventListener("pointerdown", triggerSuppress, { capture: true });
-      }
-
-      const portalContainer = document.getElementById("ql-picker-portal-container");
-      if (portalContainer) {
-        portalContainer.addEventListener("touchstart", triggerSuppress, { passive: true, capture: true });
-        portalContainer.addEventListener("mousedown", triggerSuppress, { capture: true });
-        portalContainer.addEventListener("pointerdown", triggerSuppress, { capture: true });
       }
 
       const origFocus = editor.focus.bind(editor);
@@ -446,7 +321,51 @@ export default function RichTextEditor({
         };
       }
 
-      cleanupPortals = setupPickerPortals(toolbarContainer);
+      // Reposition picker options on click so they are never hidden under content/keyboard
+      const handlePickerClick = (e) => {
+        const label = e.target.closest(".ql-picker-label");
+        if (!label) return;
+        const picker = label.closest(".ql-picker");
+        const options = picker?.querySelector(".ql-picker-options");
+        if (!picker || !options) return;
+
+        const isAlign = picker.classList.contains("ql-align");
+
+        requestAnimationFrame(() => {
+          const isExpanded = picker.classList.contains("ql-expanded");
+          toolbarContainer?.classList.toggle("ql-has-expanded-picker", isExpanded);
+          if (!isExpanded) return;
+
+          const rect = label.getBoundingClientRect();
+          options.style.position = "fixed";
+          options.style.zIndex = "999999";
+          options.style.right = "auto";
+
+          if (isAlign) {
+            options.style.width = "38px";
+            options.style.minWidth = "38px";
+            options.style.maxWidth = "38px";
+          } else {
+            options.style.width = "auto";
+            options.style.minWidth = "120px";
+            options.style.maxWidth = "200px";
+          }
+
+          const vHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+          const spaceBelow = vHeight - rect.bottom;
+          if (spaceBelow < 220) {
+            options.style.top = "auto";
+            options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
+          } else {
+            options.style.top = `${rect.bottom + 4}px`;
+            options.style.bottom = "auto";
+          }
+          const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
+          options.style.left = `${left}px`;
+        });
+      };
+
+      toolbarContainer?.addEventListener("click", handlePickerClick);
 
       editor.on("text-change", () => {
         const contents = sanitizeQuillDelta(editor.getContents());
@@ -473,7 +392,6 @@ export default function RichTextEditor({
 
     return () => {
       disposed = true;
-      cleanupPortals?.();
       if (editor?.root && stopImageDrop) editor.root.removeEventListener("drop", stopImageDrop);
       editor?.getModule("toolbar")?.container?.remove();
       if (insertImagesRef.current) insertImagesRef.current = null;
