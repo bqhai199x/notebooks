@@ -289,11 +289,20 @@ export default function RichTextEditor({
       };
       editor.root.addEventListener("drop", stopImageDrop);
 
-      // Suppress keyboard popup on toolbar interaction
+      // Suppress keyboard popup on toolbar interaction for touch devices
       let suppressFocus = false;
       let suppressTimer = null;
+      let lastGoodRange = null;
 
-      const triggerSuppress = () => {
+      editor.on("selection-change", (range) => {
+        if (range) {
+          lastGoodRange = range;
+        }
+      });
+
+      const triggerSuppress = (e) => {
+        // Only suppress keyboard popup for touch interactions, never for desktop mouse clicks
+        if (e?.pointerType === "mouse") return;
         suppressFocus = true;
         if (suppressTimer) clearTimeout(suppressTimer);
         suppressTimer = setTimeout(() => {
@@ -304,13 +313,34 @@ export default function RichTextEditor({
       const toolbarContainer = editor.getModule("toolbar")?.container;
       if (toolbarContainer) {
         toolbarContainer.addEventListener("touchstart", triggerSuppress, { passive: true, capture: true });
-        toolbarContainer.addEventListener("mousedown", triggerSuppress, { capture: true });
         toolbarContainer.addEventListener("pointerdown", triggerSuppress, { capture: true });
+
+        // Prevent mouse clicks on toolbar controls from stealing focus / clearing editor selection
+        toolbarContainer.addEventListener("mousedown", (e) => {
+          if (e.pointerType === "touch") {
+            triggerSuppress(e);
+            return;
+          }
+          const target = e.target.closest("button, .ql-picker-label, .ql-picker-item, .ql-picker-options");
+          if (target) {
+            e.preventDefault();
+          }
+        });
       }
 
       const origFocus = editor.focus.bind(editor);
       editor.focus = (...args) => {
-        if (suppressFocus) return;
+        // Always restore the user's selection range so formatting operations never lose selected content!
+        const rangeToRestore = lastGoodRange || editor.selection?.savedRange;
+        if (rangeToRestore && editor.selection) {
+          try {
+            editor.selection.setRange(rangeToRestore, false, "silent");
+          } catch {}
+        }
+
+        if (suppressFocus) {
+          return;
+        }
         return origFocus(...args);
       };
 
