@@ -181,6 +181,7 @@ export default function RichTextEditor({
     let disposed = false;
     let editor = null;
     let stopImageDrop = null;
+    let pickersObserver = null;
 
     async function createEditor() {
       const module = await import("quill");
@@ -321,51 +322,69 @@ export default function RichTextEditor({
         };
       }
 
-      // Reposition picker options on click so they are never hidden under content/keyboard
-      const handlePickerClick = (e) => {
-        const label = e.target.closest(".ql-picker-label");
-        if (!label) return;
-        const picker = label.closest(".ql-picker");
-        const options = picker?.querySelector(".ql-picker-options");
-        if (!picker || !options) return;
+      // Reposition picker options on change so they are never hidden under content/keyboard
+      const updatePickers = () => {
+        if (!toolbarContainer) return;
+        const pickers = toolbarContainer.querySelectorAll(".ql-picker");
 
-        const isAlign = picker.classList.contains("ql-align");
-
-        requestAnimationFrame(() => {
+        pickers.forEach((picker) => {
           const isExpanded = picker.classList.contains("ql-expanded");
-          toolbarContainer?.classList.toggle("ql-has-expanded-picker", isExpanded);
-          if (!isExpanded) return;
+          const options = picker.querySelector(".ql-picker-options");
+          const label = picker.querySelector(".ql-picker-label");
+          if (!options || !label) return;
 
-          const rect = label.getBoundingClientRect();
-          options.style.position = "fixed";
-          options.style.zIndex = "999999";
-          options.style.right = "auto";
+          if (isExpanded) {
+            const isAlign = picker.classList.contains("ql-align") || picker.classList.contains("ql-icon-picker");
+            const isColor = picker.classList.contains("ql-color") || picker.classList.contains("ql-background") || picker.classList.contains("ql-color-picker");
+            const optWidth = isAlign ? 38 : (isColor ? 152 : 130);
 
-          if (isAlign) {
-            options.style.width = "38px";
-            options.style.minWidth = "38px";
-            options.style.maxWidth = "38px";
+            options.style.position = "fixed";
+            options.style.zIndex = "999999";
+            options.style.width = `${optWidth}px`;
+            options.style.minWidth = `${optWidth}px`;
+            options.style.maxWidth = `${optWidth}px`;
+
+            const rect = label.getBoundingClientRect();
+            const vHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+            const spaceBelow = vHeight - rect.bottom;
+
+            if (spaceBelow < 220) {
+              options.style.top = "auto";
+              options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
+            } else {
+              options.style.top = `${rect.bottom + 4}px`;
+              options.style.bottom = "auto";
+            }
+
+            const maxLeft = window.innerWidth - optWidth - 8;
+            const left = Math.max(8, Math.min(rect.left, maxLeft));
+            options.style.left = `${left}px`;
+            options.style.right = "auto";
           } else {
-            options.style.width = "auto";
-            options.style.minWidth = "120px";
-            options.style.maxWidth = "200px";
+            options.style.position = "";
+            options.style.top = "";
+            options.style.bottom = "";
+            options.style.left = "";
+            options.style.right = "";
+            options.style.zIndex = "";
+            options.style.width = "";
+            options.style.minWidth = "";
+            options.style.maxWidth = "";
           }
-
-          const vHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
-          const spaceBelow = vHeight - rect.bottom;
-          if (spaceBelow < 220) {
-            options.style.top = "auto";
-            options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
-          } else {
-            options.style.top = `${rect.bottom + 4}px`;
-            options.style.bottom = "auto";
-          }
-          const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
-          options.style.left = `${left}px`;
         });
       };
 
-      toolbarContainer?.addEventListener("click", handlePickerClick);
+      pickersObserver = new MutationObserver(updatePickers);
+      if (toolbarContainer) {
+        toolbarContainer.querySelectorAll(".ql-picker").forEach((p) => {
+          pickersObserver.observe(p, { attributes: true, attributeFilter: ["class"] });
+        });
+        toolbarContainer.addEventListener("scroll", () => {
+          toolbarContainer.querySelectorAll(".ql-picker.ql-expanded").forEach((p) => {
+            p.classList.remove("ql-expanded");
+          });
+        }, { passive: true });
+      }
 
       editor.on("text-change", () => {
         const contents = sanitizeQuillDelta(editor.getContents());
@@ -392,6 +411,7 @@ export default function RichTextEditor({
 
     return () => {
       disposed = true;
+      pickersObserver?.disconnect();
       if (editor?.root && stopImageDrop) editor.root.removeEventListener("drop", stopImageDrop);
       editor?.getModule("toolbar")?.container?.remove();
       if (insertImagesRef.current) insertImagesRef.current = null;

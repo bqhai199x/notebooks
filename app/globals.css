@@ -861,6 +861,33 @@ h1, h2, h3, p, ol, ul {
   height: 16px !important;
 }
 
+/* Color & Background Picker Fix */
+.rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-color-picker {
+  width: 32px;
+  height: 28px;
+}
+
+.rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-color-picker .ql-picker-label {
+  width: 32px;
+  height: 28px;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-color-picker .ql-picker-label svg {
+  width: 16px;
+  height: 16px;
+}
+
+.rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-color-picker.ql-expanded .ql-picker-options {
+  width: 152px !important;
+  min-width: 152px !important;
+  max-width: 152px !important;
+  padding: 4px !important;
+}
+
 .rich-text-editor .ql-toolbar.ql-snow .ql-picker-item {
   padding: 6px 10px;
   border-radius: var(--radius-sm);
@@ -1553,11 +1580,6 @@ h1, h2, h3, p, ol, ul {
     border-radius: var(--radius-lg) var(--radius-lg) 0 0;
   }
 
-  .rich-text-editor .ql-toolbar.ql-snow.ql-has-expanded-picker,
-  .rich-text-editor .ql-toolbar.ql-snow:has(.ql-picker.ql-expanded) {
-    overflow: visible !important;
-  }
-
   .rich-text-editor .ql-toolbar.ql-snow::-webkit-scrollbar {
     display: none;
   }
@@ -1585,6 +1607,14 @@ h1, h2, h3, p, ol, ul {
   .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label svg {
     width: 16px;
     height: 16px;
+  }
+
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-color-picker,
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-icon-picker,
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-align {
+    width: 32px;
+    height: 32px;
+    flex-shrink: 0;
   }
 
   .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header {
