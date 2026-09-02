@@ -48,10 +48,10 @@ export default function PullToRefreshIndicator({
         </span>
         <span>
           {isRefreshing
-            ? "Updating..."
+            ? "Refreshing..."
             : isReady
               ? "Release to refresh"
-              : "Pull to refresh"}
+              : "Pull down to refresh"}
         </span>
       </div>
     </div>

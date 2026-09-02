@@ -130,6 +130,7 @@ export default function Home() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
 
+
   const itemsListRef = useRef(null);
   const itemsRef = useRef([]);
   const objectUrls = useRef(new Set());
@@ -751,7 +752,7 @@ export default function Home() {
     const content = richTextForDisplay(item.content, item.contentFormat);
     const inlineImageIds = inlineImageAttachmentIds(content);
     setEditingId(item.id);
-    setComposerExpanded(false);
+    setComposerExpanded(true);
     setEditDraft(content);
     discardedAttachmentsForTarget("edit").clear();
     setAttachmentsForTarget("edit", item.attachments.map((attachment) => ({
@@ -770,6 +771,7 @@ export default function Home() {
     setEditingId(null);
     setEditDraft(emptyRichText());
     setAttachmentsForTarget("edit", []);
+    setComposerExpanded(false);
   }
 
   function cancelEdit() {
@@ -969,7 +971,6 @@ export default function Home() {
     setIsPulling(false);
     setIsRefreshing(false);
     setIsDraggingFile(false);
-    dragCounterRef.current = 0;
   }
 
   if (locked) {
@@ -988,20 +989,33 @@ export default function Home() {
     <main className="app-shell">
       <header className="app-header">
         <div className="app-brand">
-          <span className="brand-orbit" aria-hidden="true" />
-          <h1>Notes</h1>
-          <small>{items.length} items</small>
+          <div className="brand-icon-box" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
+              <path d="M6 6h10" />
+              <path d="M6 10h10" />
+            </svg>
+          </div>
+          <h1 className="brand-title">Notes</h1>
+          <span className="brand-badge">{items.length}</span>
         </div>
-        <button className="button ghost" type="button" onClick={lock}>
-          Lock
-        </button>
+
+        <div className="header-actions">
+          <button className="btn btn-ghost btn-sm" type="button" onClick={lock} title="Lock and exit">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
+              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
+            </svg>
+            <span>Lock</span>
+          </button>
+        </div>
       </header>
 
       <section className="notes-surface">
         {isDraggingFile && (
           <div className="drop-overlay" aria-hidden="true">
             <div className="drop-overlay-icon">
-              <svg viewBox="0 0 24 24">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                 <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
                 <polyline points="17 8 12 3 7 8" />
                 <line x1="12" y1="3" x2="12" y2="15" />
@@ -1009,10 +1023,11 @@ export default function Home() {
             </div>
             <div className="drop-overlay-title">Drop files to attach</div>
             <div className="drop-overlay-subtitle">
-              {editingId ? "Adding to editing note" : "Adding to new note"} (max 10 attachments)
+              {editingId ? "Attaching to active note" : "Attaching to new note"} (max 10 attachments)
             </div>
           </div>
         )}
+
         <div className="items-list" ref={itemsListRef}>
           <PullToRefreshIndicator
             pullDistance={pullDistance}
@@ -1020,14 +1035,29 @@ export default function Home() {
             isRefreshing={isRefreshing}
             isPulling={isPulling}
           />
-          {loading && <p className="empty-state">Loading...</p>}
-          {!loading && items.length === 0 && (
-            <div className="empty-items">
-              <span className="empty-items-icon" aria-hidden="true" />
-              <h2>No notes yet</h2>
-              <p>Use the toolbar below to format text, add links, and attach files or images.</p>
+
+          {loading && (
+            <div className="empty-state-loading">
+              <span className="spinner-icon" />
+              <span>Loading notes...</span>
             </div>
           )}
+
+          {!loading && items.length === 0 && (
+            <div className="empty-items">
+              <div className="empty-icon-wrap" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z" />
+                  <polyline points="14 2 14 8 20 8" />
+                  <line x1="12" y1="18" x2="12" y2="12" />
+                  <line x1="9" y1="15" x2="15" y2="15" />
+                </svg>
+              </div>
+              <h2>No notes yet</h2>
+              <p>Start writing notes, attaching files or pasting images using the composer below.</p>
+            </div>
+          )}
+
           {items.map((item, index) => (
             <ItemCard
               key={item.id}
@@ -1042,32 +1072,32 @@ export default function Home() {
               attachmentUrls={attachmentUrls}
               downloadingAttachments={downloadingAttachments}
               onDownloadAttachment={downloadAttachment}
-              editDraft={editDraft}
-              setEditDraft={(content) => handleRichTextChange(content, "edit")}
-              editAttachments={editAttachments}
-              onRemoveEditAttachment={removeEditAttachment}
-              onSelectFiles={(files) => handleAddFiles(files, "edit")}
-              onCancelEdit={cancelEdit}
-              onSaveEdit={saveEdit}
-              onSelectInlineImages={(files) => addInlineImages(files, "edit")}
             />
           ))}
         </div>
 
         <ItemComposer
           expanded={composerExpanded}
-          onExpandedChange={setComposerExpanded}
-          draft={draft}
-          setDraft={(content) => handleRichTextChange(content, "new")}
-          pending={pending}
-          onRemovePending={removePending}
-          onAddItem={addItem}
-          onSelectInlineImages={(files) => addInlineImages(files, "new")}
+          onExpandedChange={(next) => {
+            if (!next && editingId) {
+              cancelEdit();
+            } else {
+              setComposerExpanded(next);
+            }
+          }}
+          draft={editingItem ? editDraft : draft}
+          setDraft={(content) => handleRichTextChange(content, editingItem ? "edit" : "new")}
+          pending={editingItem ? editAttachments : pending}
+          onRemovePending={editingItem ? removeEditAttachment : removePending}
+          onAddItem={editingItem ? saveEdit : addItem}
+          onSelectInlineImages={(files) => addInlineImages(files, editingItem ? "edit" : "new")}
           attachmentUrls={attachmentUrls}
           saving={saving}
           uploading={uploading}
-          onSelectFiles={(files) => handleAddFiles(files, "new")}
+          onSelectFiles={(files) => handleAddFiles(files, editingItem ? "edit" : "new")}
           notice={notice}
+          editingItem={editingItem}
+          onCancelEdit={cancelEdit}
         />
       </section>
     </main>

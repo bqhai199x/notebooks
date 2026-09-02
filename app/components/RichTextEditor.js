@@ -81,7 +81,7 @@ const TOOLBAR_GROUPS = [
   ["bold", "italic", "underline", "strike", "code"],
   [{ color: [] }, { background: [] }],
   [{ script: "sub" }, { script: "super" }],
-  ["blockquote", "code-block"],
+  ["blockquote"],
   [{ list: "ordered" }, { list: "bullet" }, { list: "check" }],
   [{ indent: "-1" }, { indent: "+1" }],
   [{ direction: "rtl" }, { align: [] }],
@@ -124,7 +124,6 @@ const FORMATS = [
   "list",
   "indent",
   "blockquote",
-  "code-block",
   "direction",
   "align",
   "link",
@@ -145,6 +144,8 @@ export default function RichTextEditor({
   collapsed = false,
   onCollapsedChange,
   collapseControlsId,
+  autoFocus = false,
+  autoFocusTrigger,
 }) {
   const hostRef = useRef(null);
   const quillRef = useRef(null);
@@ -161,6 +162,8 @@ export default function RichTextEditor({
   const collapsedRef = useRef(Boolean(collapsed));
   const onCollapsedChangeRef = useRef(onCollapsedChange);
   const collapseControlsIdRef = useRef(collapseControlsId);
+  const autoFocusRef = useRef(autoFocus);
+  autoFocusRef.current = autoFocus;
 
   valueRef.current = value;
   onChangeRef.current = onChange;
@@ -171,6 +174,8 @@ export default function RichTextEditor({
   collapsedRef.current = Boolean(collapsed);
   onCollapsedChangeRef.current = onCollapsedChange;
   collapseControlsIdRef.current = collapseControlsId;
+
+  const isCollapsed = Boolean(collapsible && collapsed);
 
   useEffect(() => {
     let disposed = false;
@@ -283,6 +288,49 @@ export default function RichTextEditor({
       };
       editor.root.addEventListener("drop", stopImageDrop);
 
+      // Reposition picker options on click so they are never hidden under content/keyboard
+      const handlePickerClick = (e) => {
+        const label = e.target.closest(".ql-picker-label");
+        if (!label) return;
+        const picker = label.closest(".ql-picker");
+        const options = picker?.querySelector(".ql-picker-options");
+        if (!picker || !options) return;
+
+        const isAlign = picker.classList.contains("ql-align");
+
+        requestAnimationFrame(() => {
+          if (!picker.classList.contains("ql-expanded")) return;
+          const rect = label.getBoundingClientRect();
+          options.style.position = "fixed";
+          options.style.zIndex = "999999";
+          options.style.right = "auto";
+
+          if (isAlign) {
+            options.style.width = "38px";
+            options.style.minWidth = "38px";
+            options.style.maxWidth = "38px";
+          } else {
+            options.style.width = "auto";
+            options.style.minWidth = "120px";
+            options.style.maxWidth = "200px";
+          }
+
+          const spaceBelow = window.innerHeight - rect.bottom;
+          if (spaceBelow < 220) {
+            options.style.top = "auto";
+            options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
+          } else {
+            options.style.top = `${rect.bottom + 4}px`;
+            options.style.bottom = "auto";
+          }
+          const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
+          options.style.left = `${left}px`;
+        });
+      };
+
+      const toolbarContainer = editor.getModule("toolbar")?.container;
+      toolbarContainer?.addEventListener("click", handlePickerClick);
+
       editor.on("text-change", () => {
         const contents = sanitizeQuillDelta(editor.getContents());
         if (!sameContents(editor.getContents(), contents)) {
@@ -290,6 +338,18 @@ export default function RichTextEditor({
         }
         onChangeRef.current?.(contents);
       });
+
+      if (autoFocusRef.current && !readOnly && !disabledRef.current) {
+        setTimeout(() => {
+          if (disposed) return;
+          try {
+            editor.focus();
+            editor.root?.focus();
+            const length = editor.getLength();
+            editor.setSelection(length, length);
+          } catch {}
+        }, 100);
+      }
     }
 
     void createEditor();
@@ -303,6 +363,22 @@ export default function RichTextEditor({
       if (hostRef.current) hostRef.current.replaceChildren();
     };
   }, [placeholder, readOnly, collapsible]);
+
+  useEffect(() => {
+    const editor = quillRef.current;
+    if (!editor || readOnly || disabled || isCollapsed) return;
+    if (autoFocus || autoFocusTrigger) {
+      const timer = setTimeout(() => {
+        try {
+          editor.focus();
+          editor.root?.focus();
+          const length = editor.getLength();
+          editor.setSelection(length, length);
+        } catch {}
+      }, 80);
+      return () => clearTimeout(timer);
+    }
+  }, [autoFocus, autoFocusTrigger, isCollapsed, readOnly, disabled]);
 
   useEffect(() => {
     const editor = quillRef.current;
@@ -326,8 +402,6 @@ export default function RichTextEditor({
     updateCollapseButton(editor, Boolean(collapsed), collapseControlsId);
     if (collapsible && collapsed) editor?.blur();
   }, [collapsed, collapsible, collapseControlsId]);
-
-  const isCollapsed = collapsible && collapsed;
 
   return (
     <div

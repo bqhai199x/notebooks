@@ -18,62 +18,135 @@ export default function ItemComposer({
   saving,
   uploading,
   notice,
+  editingItem = null,
+  onCancelEdit,
 }) {
+  const canSubmit = !saving && !uploading && (richTextHasText(draft) || pending.length > 0);
+
+  const handleClose = () => {
+    if (editingItem) {
+      onCancelEdit?.();
+    } else {
+      onExpandedChange(false);
+    }
+  };
+
   return (
-    <div className={`composer${expanded ? "" : " composer-collapsed"}`}>
-      <div className="composer-content">
-        {expanded && (
-          <>
-            {pending.length > 0 && (
-              <div className="pending-attachments">
-                {pending.map((attachment) => (
-                  <span className="pending-chip" key={attachment.id}>
-                    <AttachmentTypeIcon type={attachment.kind} compact />
-                    <span className="chip-name">{attachment.name}</span>
-                    <button
-                      type="button"
-                      aria-label={`Remove ${attachment.name}`}
-                      onClick={() => onRemovePending(attachment)}
-                    >
-                      x
-                    </button>
-                  </span>
-                ))}
-              </div>
-            )}
-          </>
-        )}
-        <RichTextEditor
-          value={draft}
-          onChange={setDraft}
-          onSelectImages={onSelectInlineImages}
-          onSelectFiles={onSelectFiles}
-          imageUrls={attachmentUrls}
-          placeholder="Write a note..."
-          ariaLabel="Add a note"
-          disabled={saving || uploading}
-          collapsible
-          collapsed={!expanded}
-          onCollapsedChange={(nextCollapsed) => onExpandedChange(!nextCollapsed)}
-          collapseControlsId="new-note-editor"
-        />
-        {expanded && (
-          <>
-            <div className="composer-toolbar">
+    <div className={`composer-dock${editingItem ? " composer-dock-editing" : ""}`}>
+      {!expanded ? (
+        <button
+          type="button"
+          className="composer-collapsed-trigger"
+          onClick={() => onExpandedChange(true)}
+          aria-label="Expand new note composer"
+        >
+          <div className="composer-collapsed-left">
+            <svg
+              width="17"
+              height="17"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              style={{ flexShrink: 0, opacity: 0.75 }}
+            >
+              <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z" />
+              <path d="m15 5 4 4" />
+            </svg>
+            <span>Write a note, paste images or drop files...</span>
+          </div>
+          <div className="composer-trigger-actions">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+              <line x1="12" y1="5" x2="12" y2="19" />
+              <line x1="5" y1="12" x2="19" y2="12" />
+            </svg>
+          </div>
+        </button>
+      ) : (
+        <div className="composer-expanded-box">
+          {/* Pending attachments */}
+          {pending.length > 0 && (
+            <div className="attachment-chips-list">
+              {pending.map((attachment) => (
+                <span className="attachment-chip" key={attachment.id}>
+                  <AttachmentTypeIcon type={attachment.kind} filename={attachment.name} compact />
+                  <span className="chip-name">{attachment.name}</span>
+                  <button
+                    type="button"
+                    className="attachment-chip-remove"
+                    aria-label={`Remove ${attachment.name}`}
+                    onClick={() => onRemovePending(attachment)}
+                  >
+                    ×
+                  </button>
+                </span>
+              ))}
+            </div>
+          )}
+
+          <RichTextEditor
+            key="composer-editor"
+            value={draft}
+            onChange={setDraft}
+            onSelectImages={onSelectInlineImages}
+            onSelectFiles={onSelectFiles}
+            imageUrls={attachmentUrls}
+            placeholder={editingItem ? "Edit note content..." : "Write note content here..."}
+            ariaLabel={editingItem ? "Edit note content" : "Add a new note"}
+            disabled={saving || uploading}
+            collapsible={!editingItem}
+            collapsed={false}
+            onCollapsedChange={(nextCollapsed) => onExpandedChange(!nextCollapsed)}
+            collapseControlsId="new-note-editor"
+            autoFocus={true}
+            autoFocusTrigger={editingItem ? `edit-${editingItem.id}` : "new-note"}
+          />
+
+          <div className="composer-bottom-bar">
+            <div>
+              {notice && <p className="composer-message">{notice}</p>}
+            </div>
+            <div className="composer-button-group">
               <button
-                className="button primary science-button"
                 type="button"
-                onClick={onAddItem}
-                disabled={saving || uploading || (!richTextHasText(draft) && pending.length === 0)}
+                className="btn-composer-icon btn-cancel"
+                onClick={handleClose}
+                disabled={saving || uploading}
+                title={editingItem ? "Cancel edit" : "Close"}
+                aria-label={editingItem ? "Cancel edit" : "Close"}
               >
-                <span className="science-icon plus" aria-hidden="true" />
-                {saving ? "Saving..." : "Add"}
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                  <line x1="18" y1="6" x2="6" y2="18" />
+                  <line x1="6" y1="6" x2="18" y2="18" />
+                </svg>
+              </button>
+              <button
+                type="button"
+                className="btn-composer-icon btn-submit"
+                onClick={onAddItem}
+                disabled={!canSubmit}
+                title={editingItem ? "Update note" : "Add note"}
+                aria-label={editingItem ? "Update note" : "Add note"}
+              >
+                {saving || uploading ? (
+                  <span className="spinner-icon" />
+                ) : editingItem ? (
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <polyline points="20 6 9 17 4 12" />
+                  </svg>
+                ) : (
+                  <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                    <line x1="12" y1="5" x2="12" y2="19" />
+                    <line x1="5" y1="12" x2="19" y2="12" />
+                  </svg>
+                )}
               </button>
             </div>
-            {notice && <p className="composer-message">{notice}</p>}
-          </>
-        )}
-      </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
