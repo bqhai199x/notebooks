@@ -872,6 +872,79 @@ h1, h2, h3, p, ol, ul {
   color: var(--accent-primary);
 }
 
+/* ==========================================================================
+   Portal Dropdown Styles for iPhone / Mobile Viewport
+   Escapes all container overflow clipping on iOS Safari
+   ========================================================================== */
+.ql-picker-options-portal {
+  position: fixed !important;
+  z-index: 9999999 !important;
+  background: #ffffff !important;
+  border: 1px solid var(--border-subtle) !important;
+  border-radius: var(--radius-md) !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
+  padding: 4px !important;
+  box-sizing: border-box !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
+  pointer-events: auto !important;
+  margin: 0 !important;
+}
+
+.ql-picker-options-portal.ql-align-portal {
+  width: 38px !important;
+  min-width: 38px !important;
+  max-width: 38px !important;
+  padding: 4px 3px !important;
+  display: flex !important;
+  flex-direction: column !important;
+  align-items: center !important;
+  gap: 2px !important;
+}
+
+.ql-picker-options-portal.ql-header-portal {
+  width: auto !important;
+  min-width: 120px !important;
+  max-width: 200px !important;
+}
+
+.ql-picker-options-portal .ql-picker-item {
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+
+.ql-picker-options-portal.ql-header-portal .ql-picker-item {
+  padding: 6px 10px;
+  font-size: 0.84rem;
+}
+
+.ql-picker-options-portal.ql-header-portal .ql-picker-item:hover {
+  background: var(--bg-hover);
+  color: var(--accent-primary);
+}
+
+.ql-picker-options-portal.ql-align-portal .ql-picker-item {
+  width: 30px !important;
+  height: 28px !important;
+  padding: 0 !important;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center !important;
+}
+
+.ql-picker-options-portal.ql-align-portal .ql-picker-item svg {
+  width: 16px !important;
+  height: 16px !important;
+  display: block;
+}
+
+.ql-picker-options-portal.ql-align-portal .ql-picker-item:hover {
+  background: var(--bg-hover);
+}
+
 /* Editor Input Area */
 .rich-text-editor .ql-container.ql-snow {
   border: none !important;

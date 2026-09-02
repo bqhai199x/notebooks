@@ -130,6 +130,105 @@ const FORMATS = [
   "s3Image",
 ];
 
+function setupPickerPortals(toolbarContainer) {
+  if (!toolbarContainer) return () => {};
+
+  const pickers = toolbarContainer.querySelectorAll(".ql-picker");
+  const cleanups = [];
+
+  pickers.forEach((picker) => {
+    const label = picker.querySelector(".ql-picker-label");
+    const options = picker.querySelector(".ql-picker-options");
+    if (!label || !options) return;
+
+    const isAlign = picker.classList.contains("ql-align");
+    const portalClass = isAlign ? "ql-align-portal" : "ql-header-portal";
+
+    const closePortal = () => {
+      picker.classList.remove("ql-expanded");
+    };
+
+    const handleOutsideInteraction = (e) => {
+      if (!options.contains(e.target) && !label.contains(e.target)) {
+        closePortal();
+      }
+    };
+
+    const positionOptions = () => {
+      const rect = label.getBoundingClientRect();
+      const viewportHeight = window.visualViewport ? window.visualViewport.height : window.innerHeight;
+      const viewportTop = window.visualViewport ? window.visualViewport.offsetTop : 0;
+      const spaceBelow = (viewportHeight + viewportTop) - rect.bottom;
+
+      if (spaceBelow < 220) {
+        options.style.top = "auto";
+        options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
+      } else {
+        options.style.top = `${rect.bottom + 4}px`;
+        options.style.bottom = "auto";
+      }
+
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
+      options.style.left = `${left}px`;
+      options.style.right = "auto";
+    };
+
+    const observer = new MutationObserver(() => {
+      const isExpanded = picker.classList.contains("ql-expanded");
+
+      if (isExpanded) {
+        if (options.parentNode !== document.body) {
+          document.body.appendChild(options);
+        }
+        options.classList.add("ql-snow", "ql-picker", isAlign ? "ql-align" : "ql-header", "ql-picker-options-portal", portalClass);
+        options.style.display = "block";
+        positionOptions();
+
+        document.addEventListener("touchstart", handleOutsideInteraction, { passive: true });
+        document.addEventListener("mousedown", handleOutsideInteraction);
+        window.addEventListener("resize", positionOptions);
+        window.visualViewport?.addEventListener("resize", positionOptions);
+      } else {
+        if (options.parentNode === document.body) {
+          picker.appendChild(options);
+        }
+        options.classList.remove("ql-snow", "ql-picker", "ql-align", "ql-header", "ql-picker-options-portal", portalClass);
+        options.style.top = "";
+        options.style.bottom = "";
+        options.style.left = "";
+        options.style.right = "";
+        options.style.position = "";
+        options.style.zIndex = "";
+        options.style.display = "";
+
+        document.removeEventListener("touchstart", handleOutsideInteraction);
+        document.removeEventListener("mousedown", handleOutsideInteraction);
+        window.removeEventListener("resize", positionOptions);
+        window.visualViewport?.removeEventListener("resize", positionOptions);
+      }
+    });
+
+    observer.observe(picker, { attributes: true, attributeFilter: ["class"] });
+    toolbarContainer.addEventListener("scroll", closePortal, { passive: true });
+
+    cleanups.push(() => {
+      observer.disconnect();
+      toolbarContainer.removeEventListener("scroll", closePortal);
+      document.removeEventListener("touchstart", handleOutsideInteraction);
+      document.removeEventListener("mousedown", handleOutsideInteraction);
+      window.removeEventListener("resize", positionOptions);
+      window.visualViewport?.removeEventListener("resize", positionOptions);
+      if (options.parentNode === document.body) {
+        options.remove();
+      }
+    });
+  });
+
+  return () => {
+    cleanups.forEach((cleanup) => cleanup());
+  };
+}
+
 export default function RichTextEditor({
   value,
   onChange,
@@ -288,48 +387,8 @@ export default function RichTextEditor({
       };
       editor.root.addEventListener("drop", stopImageDrop);
 
-      // Reposition picker options on click so they are never hidden under content/keyboard
-      const handlePickerClick = (e) => {
-        const label = e.target.closest(".ql-picker-label");
-        if (!label) return;
-        const picker = label.closest(".ql-picker");
-        const options = picker?.querySelector(".ql-picker-options");
-        if (!picker || !options) return;
-
-        const isAlign = picker.classList.contains("ql-align");
-
-        requestAnimationFrame(() => {
-          if (!picker.classList.contains("ql-expanded")) return;
-          const rect = label.getBoundingClientRect();
-          options.style.position = "fixed";
-          options.style.zIndex = "999999";
-          options.style.right = "auto";
-
-          if (isAlign) {
-            options.style.width = "38px";
-            options.style.minWidth = "38px";
-            options.style.maxWidth = "38px";
-          } else {
-            options.style.width = "auto";
-            options.style.minWidth = "120px";
-            options.style.maxWidth = "200px";
-          }
-
-          const spaceBelow = window.innerHeight - rect.bottom;
-          if (spaceBelow < 220) {
-            options.style.top = "auto";
-            options.style.bottom = `${Math.max(8, window.innerHeight - rect.top + 4)}px`;
-          } else {
-            options.style.top = `${rect.bottom + 4}px`;
-            options.style.bottom = "auto";
-          }
-          const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
-          options.style.left = `${left}px`;
-        });
-      };
-
       const toolbarContainer = editor.getModule("toolbar")?.container;
-      toolbarContainer?.addEventListener("click", handlePickerClick);
+      cleanupPortals = setupPickerPortals(toolbarContainer);
 
       editor.on("text-change", () => {
         const contents = sanitizeQuillDelta(editor.getContents());
@@ -356,6 +415,7 @@ export default function RichTextEditor({
 
     return () => {
       disposed = true;
+      cleanupPortals?.();
       if (editor?.root && stopImageDrop) editor.root.removeEventListener("drop", stopImageDrop);
       editor?.getModule("toolbar")?.container?.remove();
       if (insertImagesRef.current) insertImagesRef.current = null;
