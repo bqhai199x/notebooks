@@ -876,8 +876,25 @@ h1, h2, h3, p, ol, ul {
    Portal Dropdown Styles for iPhone / Mobile Viewport
    Escapes all container overflow clipping on iOS Safari
    ========================================================================== */
-.ql-picker-options-portal {
+#ql-picker-portal-container {
   position: fixed !important;
+  top: 0 !important;
+  left: 0 !important;
+  width: 0 !important;
+  height: 0 !important;
+  z-index: 9999999 !important;
+  pointer-events: none !important;
+}
+
+#ql-picker-portal-container .ql-picker-portal-wrapper {
+  pointer-events: auto !important;
+}
+
+#ql-picker-portal-container .ql-picker-options {
+  position: fixed !important;
+  display: block !important;
+  visibility: visible !important;
+  opacity: 1 !important;
   z-index: 9999999 !important;
   background: #ffffff !important;
   border: 1px solid var(--border-subtle) !important;
@@ -885,14 +902,34 @@ h1, h2, h3, p, ol, ul {
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.25), 0 0 0 1px rgba(0, 0, 0, 0.08) !important;
   padding: 4px !important;
   box-sizing: border-box !important;
-  display: block !important;
-  visibility: visible !important;
-  opacity: 1 !important;
   pointer-events: auto !important;
   margin: 0 !important;
 }
 
-.ql-picker-options-portal.ql-align-portal {
+/* Header Dropdown Options */
+#ql-picker-portal-container .ql-picker.ql-header .ql-picker-options {
+  width: 130px !important;
+  min-width: 130px !important;
+  max-width: 140px !important;
+}
+
+#ql-picker-portal-container .ql-picker.ql-header .ql-picker-item {
+  padding: 6px 10px !important;
+  font-size: 0.84rem !important;
+  border-radius: var(--radius-sm) !important;
+  cursor: pointer !important;
+  display: block !important;
+  color: var(--text-primary) !important;
+}
+
+#ql-picker-portal-container .ql-picker.ql-header .ql-picker-item:hover {
+  background: var(--bg-hover) !important;
+  color: var(--accent-primary) !important;
+}
+
+/* Align Dropdown Options */
+#ql-picker-portal-container .ql-picker.ql-icon-picker .ql-picker-options,
+#ql-picker-portal-container .ql-picker.ql-align .ql-picker-options {
   width: 38px !important;
   min-width: 38px !important;
   max-width: 38px !important;
@@ -903,46 +940,30 @@ h1, h2, h3, p, ol, ul {
   gap: 2px !important;
 }
 
-.ql-picker-options-portal.ql-header-portal {
-  width: auto !important;
-  min-width: 120px !important;
-  max-width: 200px !important;
-}
-
-.ql-picker-options-portal .ql-picker-item {
-  cursor: pointer;
-  border-radius: var(--radius-sm);
-  color: var(--text-primary);
-  font-family: var(--font-sans);
-}
-
-.ql-picker-options-portal.ql-header-portal .ql-picker-item {
-  padding: 6px 10px;
-  font-size: 0.84rem;
-}
-
-.ql-picker-options-portal.ql-header-portal .ql-picker-item:hover {
-  background: var(--bg-hover);
-  color: var(--accent-primary);
-}
-
-.ql-picker-options-portal.ql-align-portal .ql-picker-item {
+#ql-picker-portal-container .ql-picker.ql-icon-picker .ql-picker-item,
+#ql-picker-portal-container .ql-picker.ql-align .ql-picker-item {
   width: 30px !important;
   height: 28px !important;
   padding: 0 !important;
   display: flex !important;
   align-items: center !important;
   justify-content: center !important;
+  border-radius: var(--radius-sm) !important;
+  cursor: pointer !important;
 }
 
-.ql-picker-options-portal.ql-align-portal .ql-picker-item svg {
+#ql-picker-portal-container .ql-picker.ql-icon-picker .ql-picker-item svg,
+#ql-picker-portal-container .ql-picker.ql-align .ql-picker-item svg {
   width: 16px !important;
   height: 16px !important;
-  display: block;
+  display: block !important;
+  position: static !important;
+  margin: 0 !important;
 }
 
-.ql-picker-options-portal.ql-align-portal .ql-picker-item:hover {
-  background: var(--bg-hover);
+#ql-picker-portal-container .ql-picker.ql-icon-picker .ql-picker-item:hover,
+#ql-picker-portal-container .ql-picker.ql-align .ql-picker-item:hover {
+  background: var(--bg-hover) !important;
 }
 
 /* Editor Input Area */
@@ -1641,27 +1662,55 @@ h1, h2, h3, p, ol, ul {
   }
 
   .rich-text-editor .ql-toolbar.ql-snow button,
-  .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label {
-    width: 32px;
-    height: 32px;
-    flex-shrink: 0;
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-icon-picker .ql-picker-label,
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-align .ql-picker-label {
+    width: 32px !important;
+    height: 32px !important;
+    flex-shrink: 0 !important;
     border-radius: var(--radius-sm);
   }
 
   .rich-text-editor .ql-toolbar.ql-snow button svg,
-  .rich-text-editor .ql-toolbar.ql-snow .ql-picker-label svg {
-    width: 16px;
-    height: 16px;
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-icon-picker .ql-picker-label svg,
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-align .ql-picker-label svg {
+    width: 16px !important;
+    height: 16px !important;
+  }
+
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-align,
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-icon-picker {
+    width: 32px !important;
+    min-width: 32px !important;
+    max-width: 32px !important;
+    height: 32px !important;
+    flex-shrink: 0 !important;
   }
 
   .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header {
-    width: 88px;
-    flex-shrink: 0;
+    width: 88px !important;
+    min-width: 88px !important;
+    max-width: 88px !important;
+    height: 32px !important;
+    flex-shrink: 0 !important;
   }
 
   .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header .ql-picker-label {
-    padding: 0 6px;
-    font-size: 0.78rem;
+    width: 100% !important;
+    height: 32px !important;
+    padding: 0 6px !important;
+    font-size: 0.78rem !important;
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    border-radius: var(--radius-sm);
+  }
+
+  .rich-text-editor .ql-toolbar.ql-snow .ql-picker.ql-header .ql-picker-label svg {
+    width: 14px !important;
+    height: 14px !important;
+    flex-shrink: 0 !important;
+    position: static !important;
+    margin: 0 !important;
   }
 
   .rich-text-editor .ql-editor {

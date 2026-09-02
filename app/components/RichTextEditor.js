@@ -133,6 +133,14 @@ const FORMATS = [
 function setupPickerPortals(toolbarContainer) {
   if (!toolbarContainer) return () => {};
 
+  let portalContainer = document.getElementById("ql-picker-portal-container");
+  if (!portalContainer) {
+    portalContainer = document.createElement("div");
+    portalContainer.id = "ql-picker-portal-container";
+    portalContainer.className = "ql-snow";
+    document.body.appendChild(portalContainer);
+  }
+
   const pickers = toolbarContainer.querySelectorAll(".ql-picker");
   const cleanups = [];
 
@@ -141,8 +149,8 @@ function setupPickerPortals(toolbarContainer) {
     const options = picker.querySelector(".ql-picker-options");
     if (!label || !options) return;
 
-    const isAlign = picker.classList.contains("ql-align");
-    const portalClass = isAlign ? "ql-align-portal" : "ql-header-portal";
+    const isAlign = picker.classList.contains("ql-align") || picker.classList.contains("ql-icon-picker");
+    let portalWrapper = null;
 
     const closePortal = () => {
       picker.classList.remove("ql-expanded");
@@ -168,7 +176,8 @@ function setupPickerPortals(toolbarContainer) {
         options.style.bottom = "auto";
       }
 
-      const left = Math.max(8, Math.min(rect.left, window.innerWidth - (isAlign ? 46 : 180)));
+      const targetWidth = isAlign ? 38 : 130;
+      const left = Math.max(8, Math.min(rect.left, window.innerWidth - targetWidth - 8));
       options.style.left = `${left}px`;
       options.style.right = "auto";
     };
@@ -177,10 +186,14 @@ function setupPickerPortals(toolbarContainer) {
       const isExpanded = picker.classList.contains("ql-expanded");
 
       if (isExpanded) {
-        if (options.parentNode !== document.body) {
-          document.body.appendChild(options);
-        }
-        options.classList.add("ql-snow", "ql-picker", isAlign ? "ql-align" : "ql-header", "ql-picker-options-portal", portalClass);
+        // Create wrapper matching picker classes so all Quill CSS selectors match!
+        portalWrapper = document.createElement("span");
+        portalWrapper.className = picker.className;
+        portalWrapper.classList.add("ql-picker-portal-wrapper");
+
+        portalContainer.appendChild(portalWrapper);
+        portalWrapper.appendChild(options);
+
         options.style.display = "block";
         positionOptions();
 
@@ -189,10 +202,13 @@ function setupPickerPortals(toolbarContainer) {
         window.addEventListener("resize", positionOptions);
         window.visualViewport?.addEventListener("resize", positionOptions);
       } else {
-        if (options.parentNode === document.body) {
+        if (options.parentNode && options.parentNode !== picker) {
           picker.appendChild(options);
         }
-        options.classList.remove("ql-snow", "ql-picker", "ql-align", "ql-header", "ql-picker-options-portal", portalClass);
+        if (portalWrapper && portalWrapper.parentNode) {
+          portalWrapper.remove();
+          portalWrapper = null;
+        }
         options.style.top = "";
         options.style.bottom = "";
         options.style.left = "";
@@ -218,8 +234,11 @@ function setupPickerPortals(toolbarContainer) {
       document.removeEventListener("mousedown", handleOutsideInteraction);
       window.removeEventListener("resize", positionOptions);
       window.visualViewport?.removeEventListener("resize", positionOptions);
-      if (options.parentNode === document.body) {
-        options.remove();
+      if (options.parentNode && options.parentNode !== picker) {
+        picker.appendChild(options);
+      }
+      if (portalWrapper && portalWrapper.parentNode) {
+        portalWrapper.remove();
       }
     });
   });
@@ -387,7 +406,46 @@ export default function RichTextEditor({
       };
       editor.root.addEventListener("drop", stopImageDrop);
 
+      // Suppress keyboard popup on toolbar / dropdown interaction
+      let suppressFocus = false;
+      let suppressTimer = null;
+
+      const triggerSuppress = () => {
+        suppressFocus = true;
+        if (suppressTimer) clearTimeout(suppressTimer);
+        suppressTimer = setTimeout(() => {
+          suppressFocus = false;
+        }, 500);
+      };
+
       const toolbarContainer = editor.getModule("toolbar")?.container;
+      if (toolbarContainer) {
+        toolbarContainer.addEventListener("touchstart", triggerSuppress, { passive: true, capture: true });
+        toolbarContainer.addEventListener("mousedown", triggerSuppress, { capture: true });
+        toolbarContainer.addEventListener("pointerdown", triggerSuppress, { capture: true });
+      }
+
+      const portalContainer = document.getElementById("ql-picker-portal-container");
+      if (portalContainer) {
+        portalContainer.addEventListener("touchstart", triggerSuppress, { passive: true, capture: true });
+        portalContainer.addEventListener("mousedown", triggerSuppress, { capture: true });
+        portalContainer.addEventListener("pointerdown", triggerSuppress, { capture: true });
+      }
+
+      const origFocus = editor.focus.bind(editor);
+      editor.focus = (...args) => {
+        if (suppressFocus) return;
+        return origFocus(...args);
+      };
+
+      if (editor.root) {
+        const origRootFocus = editor.root.focus.bind(editor.root);
+        editor.root.focus = (...args) => {
+          if (suppressFocus) return;
+          return origRootFocus(...args);
+        };
+      }
+
       cleanupPortals = setupPickerPortals(toolbarContainer);
 
       editor.on("text-change", () => {
