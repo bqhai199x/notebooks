@@ -3,7 +3,7 @@
 import { useEffect, useRef } from "react";
 import { emptyRichText, normalizeQuillDelta, sanitizeQuillDelta } from "../../lib/rich-text";
 
-const EMPTY_IMAGE_SRC = "about:blank";
+const EMPTY_IMAGE_SRC = "data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 1 1'%3E%3C/svg%3E";
 let registeredQuill = null;
 
 function registerS3ImageBlot(Quill) {
@@ -21,8 +21,11 @@ function registerS3ImageBlot(Quill) {
       const node = super.create();
       const attachmentId = typeof value?.attachmentId === "string" ? value.attachmentId : "";
       const alt = typeof value?.alt === "string" ? value.alt : "";
+      const src = typeof value?.src === "string" && value.src && value.src !== "about:blank"
+        ? value.src
+        : (value?.previewUrl || EMPTY_IMAGE_SRC);
 
-      node.setAttribute("src", EMPTY_IMAGE_SRC);
+      node.setAttribute("src", src);
       node.setAttribute("data-attachment-id", attachmentId);
       node.setAttribute("alt", alt);
       return node;
@@ -45,10 +48,9 @@ function registerS3ImageBlot(Quill) {
   Quill.register(S3Image, true);
   icons.file = [
     '<svg viewBox="0 0 18 18" aria-hidden="true">',
-    '<path class="ql-stroke" d="M4.5 2.5h5l4 4v9H4.5z" />',
-    '<path class="ql-stroke" d="M9.5 2.5v4h4" />',
-    '<path class="ql-stroke" d="M9 13V8" />',
-    '<path class="ql-stroke" d="m6.8 10.2L9 8l2.2 2.2" />',
+    '<path class="ql-stroke" d="M15.5 11.5v3a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 2.5 14.5v-3" />',
+    '<polyline class="ql-stroke" points="12.5 6 9 2.5 5.5 6" />',
+    '<line class="ql-stroke" x1="9" y1="2.5" x2="9" y2="11.5" />',
     "</svg>",
   ].join("");
   icons.collapse = [
@@ -60,7 +62,15 @@ function registerS3ImageBlot(Quill) {
 }
 
 function sameContents(left, right) {
-  return JSON.stringify(left) === JSON.stringify(right);
+  if (left === right) return true;
+  if (!left || !right) return false;
+  try {
+    const leftOps = Array.isArray(left?.ops) ? left.ops : (normalizeQuillDelta(left || emptyRichText()).ops || []);
+    const rightOps = Array.isArray(right?.ops) ? right.ops : (normalizeQuillDelta(right || emptyRichText()).ops || []);
+    return JSON.stringify(leftOps) === JSON.stringify(rightOps);
+  } catch {
+    return false;
+  }
 }
 
 function hydrateImageSources(root, imageUrls) {
@@ -69,9 +79,15 @@ function hydrateImageSources(root, imageUrls) {
   root.querySelectorAll("img.ql-s3-image[data-attachment-id]").forEach((image) => {
     const attachmentId = image.getAttribute("data-attachment-id");
     const source = attachmentId ? imageUrls?.[attachmentId] : null;
-    const nextSource = source || EMPTY_IMAGE_SRC;
-    if (image.getAttribute("src") !== nextSource) {
-      image.setAttribute("src", nextSource);
+    if (source) {
+      if (image.getAttribute("src") !== source) {
+        image.setAttribute("src", source);
+      }
+    } else {
+      const currentSrc = image.getAttribute("src");
+      if (!currentSrc || currentSrc === "about:blank") {
+        image.setAttribute("src", EMPTY_IMAGE_SRC);
+      }
     }
   });
 }
@@ -89,8 +105,9 @@ const TOOLBAR_GROUPS = [
 
 function toolbarFor(collapsible) {
   return [
+    ["file"],
     ...TOOLBAR_GROUPS,
-    ["link", "image", "file", "clean", ...(collapsible ? ["collapse"] : [])],
+    ["link", "image", "clean", ...(collapsible ? ["collapse"] : [])],
   ];
 }
 
@@ -153,6 +170,7 @@ export default function RichTextEditor({
   const attachmentInputRef = useRef(null);
   const imageRangeRef = useRef(null);
   const insertImagesRef = useRef(null);
+  const lastEmittedValueRef = useRef(null);
   const valueRef = useRef(value);
   const onChangeRef = useRef(onChange);
   const onSelectImagesRef = useRef(onSelectImages);
@@ -261,12 +279,17 @@ export default function RichTextEditor({
 
         selected.forEach((attachment) => {
           if (!attachment?.id) return;
+          const previewUrl = attachment._previewUrl || imageUrlsRef.current?.[attachment.id] || "";
           editor.insertEmbed(index, "s3Image", {
             attachmentId: attachment.id,
             ...(attachment.name ? { alt: attachment.name } : {}),
+            ...(previewUrl ? { src: previewUrl, previewUrl } : {}),
           }, "user");
           index += 1;
         });
+        if (editor.root?.querySelector("img, .ql-s3-image")) {
+          editor.root.classList.remove("ql-blank");
+        }
         editor.setSelection(index, 0, "silent");
       };
       insertImagesRef.current = insertImages;
@@ -283,11 +306,11 @@ export default function RichTextEditor({
 
       stopImageDrop = (event) => {
         const files = Array.from(event.dataTransfer?.files || []);
-        if (files.some((file) => file?.type?.startsWith("image/"))) {
-          event.stopPropagation();
+        if (files.length > 0) {
+          event.stopImmediatePropagation();
         }
       };
-      editor.root.addEventListener("drop", stopImageDrop);
+      editor.root.addEventListener("drop", stopImageDrop, { capture: true });
 
       // Suppress keyboard popup on toolbar interaction for touch devices
       let suppressFocus = false;
@@ -416,12 +439,15 @@ export default function RichTextEditor({
         }, { passive: true });
       }
 
-      editor.on("text-change", () => {
-        const contents = sanitizeQuillDelta(editor.getContents());
-        if (!sameContents(editor.getContents(), contents)) {
-          editor.setContents(contents, "silent");
+      editor.on("text-change", (delta, oldDelta, source) => {
+        if (editor.root?.querySelector("img, .ql-s3-image")) {
+          editor.root.classList.remove("ql-blank");
         }
-        onChangeRef.current?.(contents);
+        if (source === "user") {
+          const contents = sanitizeQuillDelta(editor.getContents());
+          lastEmittedValueRef.current = contents;
+          onChangeRef.current?.(contents);
+        }
       });
 
       if (autoFocusRef.current && !readOnly && !disabledRef.current) {
@@ -470,9 +496,20 @@ export default function RichTextEditor({
     const editor = quillRef.current;
     if (!editor) return;
 
+    if (lastEmittedValueRef.current && sameContents(lastEmittedValueRef.current, value)) {
+      hydrateImageSources(editor.root, imageUrls);
+      return;
+    }
+
     const nextValue = normalizeQuillDelta(value || emptyRichText());
     if (!sameContents(editor.getContents(), nextValue)) {
+      const range = editor.getSelection();
       editor.setContents(nextValue, "silent");
+      if (range && editor.hasFocus()) {
+        try {
+          editor.setSelection(range.index, range.length, "silent");
+        } catch {}
+      }
     }
     hydrateImageSources(editor.root, imageUrls);
   }, [value, imageUrls]);

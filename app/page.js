@@ -8,6 +8,7 @@ import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
 import {
   emptyRichText,
   inlineImageAttachmentIds,
+  normalizeQuillDelta,
   QUILL_DELTA_FORMAT,
   removeInlineImages,
   replaceInlineImageAttachmentIds,
@@ -90,20 +91,53 @@ async function uploadMultipartToS3(file, upload) {
   return completedParts;
 }
 
+async function createThumbnail(file, maxDim = 120, quality = 0.65) {
+  if (!file || typeof window === "undefined" || !file.type?.startsWith("image/")) return null;
+  try {
+    const bitmap = await createImageBitmap(file);
+    let { width, height } = bitmap;
+    if (width > maxDim || height > maxDim) {
+      if (width > height) {
+        height = Math.round((height * maxDim) / width);
+        width = maxDim;
+      } else {
+        width = Math.round((width * maxDim) / height);
+        height = maxDim;
+      }
+    }
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.max(1, width);
+    canvas.height = Math.max(1, height);
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return null;
+    ctx.drawImage(bitmap, 0, 0, width, height);
+    bitmap.close();
+    return canvas.toDataURL("image/webp", quality) || canvas.toDataURL("image/jpeg", quality);
+  } catch {
+    return null;
+  }
+}
+
 function selectedFileAttachment(file, inline = false) {
-  return {
+  const attachment = {
     id: makeId(),
-    kind: file.type.startsWith("image/") ? "image" : "file",
+    kind: file.type?.startsWith("image/") ? "image" : "file",
     name: file.name || "file",
     contentType: file.type,
     size: file.size,
     file,
     ...(inline ? { _inline: true } : {}),
   };
+  if (file.type?.startsWith("image/")) {
+    void createThumbnail(file).then((thumb) => {
+      if (thumb) attachment.thumbnail = thumb;
+    });
+  }
+  return attachment;
 }
 
 function persistedAttachment(attachment) {
-  const { file, _inline, ...value } = attachment;
+  const { file, _inline, _previewUrl, ...value } = attachment;
   return value;
 }
 
@@ -120,6 +154,7 @@ export default function Home() {
   const [draft, setDraft] = useState(() => emptyRichText());
   const [pending, setPending] = useState([]);
   const [composerExpanded, setComposerExpanded] = useState(false);
+  const [currentSpaceId, setCurrentSpaceId] = useState("default");
   const [editingId, setEditingId] = useState(null);
   const [editDraft, setEditDraft] = useState(() => emptyRichText());
   const [editAttachments, setEditAttachments] = useState([]);
@@ -137,8 +172,35 @@ export default function Home() {
   const loadingAttachments = useRef(new Set());
   const failedAttachments = useRef(new Set());
   const dragCounterRef = useRef(0);
+  const isInternalDragRef = useRef(false);
   const pendingRef = useRef([]);
   const editAttachmentsRef = useRef([]);
+  const draftRef = useRef(draft);
+  const editDraftRef = useRef(editDraft);
+
+  useEffect(() => {
+    const onDragStart = () => {
+      isInternalDragRef.current = true;
+    };
+    const onDragEnd = () => {
+      isInternalDragRef.current = false;
+    };
+    const preventChromeDrop = (e) => {
+      if (e.dataTransfer?.types?.includes("Files")) {
+        e.preventDefault();
+      }
+    };
+    window.addEventListener("dragstart", onDragStart, { capture: true });
+    window.addEventListener("dragend", onDragEnd, { capture: true });
+    window.addEventListener("dragover", preventChromeDrop, false);
+    window.addEventListener("drop", preventChromeDrop, false);
+    return () => {
+      window.removeEventListener("dragstart", onDragStart, { capture: true });
+      window.removeEventListener("dragend", onDragEnd, { capture: true });
+      window.removeEventListener("dragover", preventChromeDrop, false);
+      window.removeEventListener("drop", preventChromeDrop, false);
+    };
+  }, []);
   const discardedInlineAttachments = useRef({ new: new Map(), edit: new Map() });
 
   const pullDistanceRef = useRef(0);
@@ -160,6 +222,8 @@ export default function Home() {
   pendingRef.current = pending;
   editAttachmentsRef.current = editAttachments;
   reorderingRef.current = reordering;
+  draftRef.current = draft;
+  editDraftRef.current = editDraft;
 
   const editingItem = useMemo(
     () => items.find((item) => item.id === editingId) ?? null,
@@ -266,6 +330,7 @@ export default function Home() {
       const previewUrl = URL.createObjectURL(attachment.file);
       objectUrls.current.add(previewUrl);
       imagePreviews[attachment.id] = previewUrl;
+      attachment._previewUrl = previewUrl;
     });
 
     setAttachmentsForTarget(target, [...current, ...attachments]);
@@ -322,6 +387,9 @@ export default function Home() {
       const nextItems = orderItems(data.items);
       itemsRef.current = nextItems;
       setItems(nextItems);
+      if (data.spaceId) {
+        setCurrentSpaceId(data.spaceId);
+      }
       setLocked(false);
     } catch (error) {
       setNotice(error.message);
@@ -515,8 +583,27 @@ export default function Home() {
       headers: { "x-notes-access-key": accessKey },
     });
     if (!response.ok) throw new Error("Could not load attachment.");
-    const url = URL.createObjectURL(await response.blob());
+    const blob = await response.blob();
+    const url = URL.createObjectURL(blob);
     objectUrls.current.add(url);
+
+    if (!attachment.thumbnail && (attachment.contentType?.startsWith("image/") || attachment.kind === "image")) {
+      void createThumbnail(blob).then((thumb) => {
+        if (thumb) {
+          attachment.thumbnail = thumb;
+          setItems((current) => current.map((it) => {
+            if (it.attachments?.some((a) => a.id === attachment.id)) {
+              return {
+                ...it,
+                attachments: it.attachments.map((a) => a.id === attachment.id ? { ...a, thumbnail: thumb } : a),
+              };
+            }
+            return it;
+          }));
+        }
+      });
+    }
+
     return url;
   }
 
@@ -687,10 +774,15 @@ export default function Home() {
         }
         const storedAttachment = await uploadAttachment(attachment.file);
         uploaded.push(storedAttachment);
+        let thumbnail = attachment.thumbnail;
+        if (!thumbnail && attachment.file?.type?.startsWith("image/")) {
+          thumbnail = await createThumbnail(attachment.file);
+        }
         completed.push({
           sourceId: attachment.id,
           attachment: {
             ...storedAttachment,
+            ...(thumbnail ? { thumbnail } : {}),
             ...(attachment._inline ? { _inline: true } : {}),
           },
         });
@@ -874,36 +966,81 @@ export default function Home() {
     }
   }
 
+  async function updateItemShare(shareConfig) {
+    const data = await callApi("/api/items", {
+      method: "PATCH",
+      body: JSON.stringify({
+        action: "update-share",
+        ...shareConfig,
+      }),
+    });
+    if (data.item) {
+      setItems((current) => {
+        const next = current.map((entry) => entry.id === data.item.id ? data.item : entry);
+        itemsRef.current = next;
+        return next;
+      });
+      return data.item;
+    }
+    throw new Error(data.error || "Không thể cập nhật chia sẻ.");
+  }
+
   function handleAddFiles(filesList, target = editingId ? "edit" : "new") {
     const filesArray = Array.from(filesList || []);
     if (!filesArray.length) return;
 
     if (target === "new") {
       setComposerExpanded(true);
+      try {
+        localStorage.setItem("notes-composer-expanded", "true");
+      } catch {}
     }
 
-    const currentAttachments = attachmentsForTarget(target);
-    const available = MAX_ATTACHMENTS - currentAttachments.length;
-    if (available <= 0) {
-      setNotice("Attachment limit reached.");
-      return;
+    const imageFiles = filesArray.filter((file) => file?.type?.startsWith("image/"));
+    const nonImageFiles = filesArray.filter((file) => !file?.type?.startsWith("image/"));
+
+    // 1. Tệp đính kèm là ảnh thì là 1 phần của content (chèn trực tiếp inline vào editor)
+    if (imageFiles.length > 0) {
+      const inlineAttachments = addInlineImages(imageFiles, target);
+      if (inlineAttachments.length > 0) {
+        const currentDraft = target === "edit" ? editDraftRef.current : draftRef.current;
+        const currentOps = [...(normalizeQuillDelta(currentDraft).ops || [])];
+        const lastOp = currentOps[currentOps.length - 1];
+        if (lastOp && typeof lastOp.insert === "string" && !lastOp.insert.endsWith("\n")) {
+          currentOps[currentOps.length - 1] = { ...lastOp, insert: `${lastOp.insert}\n` };
+        }
+        inlineAttachments.forEach((att) => {
+          currentOps.push({ insert: { s3Image: { attachmentId: att.id, alt: att.name || "Image" } } });
+          currentOps.push({ insert: "\n" });
+        });
+        const nextContent = { ops: currentOps };
+        if (target === "edit") {
+          setEditDraft(nextContent);
+        } else {
+          setDraft(nextContent);
+        }
+      }
     }
 
-    const files = filesArray.slice(0, available);
-    setNotice("");
-    setAttachmentsForTarget(target, [...currentAttachments, ...files.map(selectedFileAttachment)]);
-    if (filesArray.length > available) {
-      setNotice("Attachment limit reached.");
+    // 2. Chỉ tệp không phải ảnh mới tách riêng ra danh sách tệp đính kèm
+    if (nonImageFiles.length > 0) {
+      const currentAttachments = attachmentsForTarget(target);
+      const available = MAX_ATTACHMENTS - currentAttachments.length;
+      if (available <= 0) {
+        setNotice("Attachment limit reached.");
+        return;
+      }
+
+      const files = nonImageFiles.slice(0, available);
+      setNotice("");
+      setAttachmentsForTarget(target, [...currentAttachments, ...files.map((f) => selectedFileAttachment(f, false))]);
+      if (nonImageFiles.length > available) {
+        setNotice("Attachment limit reached.");
+      }
     }
   }
 
   useEffect(() => {
-    if (locked) {
-      setIsDraggingFile(false);
-      dragCounterRef.current = 0;
-      return;
-    }
-
     const hasFiles = (e) => {
       if (!e.dataTransfer) return false;
       const types = Array.from(e.dataTransfer.types || []);
@@ -913,6 +1050,7 @@ export default function Home() {
     const handleDragEnter = (e) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
+      if (isInternalDragRef.current || locked) return;
       dragCounterRef.current += 1;
       setIsDraggingFile(true);
     };
@@ -920,11 +1058,14 @@ export default function Home() {
     const handleDragOver = (e) => {
       if (!hasFiles(e)) return;
       e.preventDefault();
+      if (isInternalDragRef.current || locked) return;
       e.dataTransfer.dropEffect = "copy";
     };
 
     const handleDragLeave = (e) => {
       if (!hasFiles(e)) return;
+      e.preventDefault();
+      if (isInternalDragRef.current || locked) return;
       dragCounterRef.current -= 1;
       if (dragCounterRef.current <= 0) {
         dragCounterRef.current = 0;
@@ -934,9 +1075,11 @@ export default function Home() {
 
     const handleDrop = (e) => {
       if (!hasFiles(e)) return;
-      e.preventDefault();
+      e.preventDefault(); // Luôn preventDefault để Chrome không bao giờ mở file trong tab
       dragCounterRef.current = 0;
       setIsDraggingFile(false);
+
+      if (isInternalDragRef.current || locked) return;
 
       if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
         handleAddFiles(e.dataTransfer.files);
@@ -1087,6 +1230,8 @@ export default function Home() {
               attachmentUrls={attachmentUrls}
               downloadingAttachments={downloadingAttachments}
               onDownloadAttachment={downloadAttachment}
+              spaceId={currentSpaceId}
+              onUpdateShare={updateItemShare}
             />
           ))}
         </div>

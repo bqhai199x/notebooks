@@ -66,26 +66,6 @@ export default function ItemComposer({
         </button>
       ) : (
         <div className="composer-expanded-box">
-          {/* Pending attachments */}
-          {pending.length > 0 && (
-            <div className="attachment-chips-list">
-              {pending.map((attachment) => (
-                <span className="attachment-chip" key={attachment.id}>
-                  <AttachmentTypeIcon type={attachment.kind} filename={attachment.name} compact />
-                  <span className="chip-name">{attachment.name}</span>
-                  <button
-                    type="button"
-                    className="attachment-chip-remove"
-                    aria-label={`Remove ${attachment.name}`}
-                    onClick={() => onRemovePending(attachment)}
-                  >
-                    ×
-                  </button>
-                </span>
-              ))}
-            </div>
-          )}
-
           <RichTextEditor
             key="composer-editor"
             value={draft}
@@ -105,8 +85,26 @@ export default function ItemComposer({
           />
 
           <div className="composer-bottom-bar">
-            <div>
+            <div className="composer-bottom-left">
               {notice && <p className="composer-message">{notice}</p>}
+              {pending.filter((att) => !att._inline && att.kind !== "image").length > 0 && (
+                <div className="composer-chips-scroll">
+                  {pending.filter((att) => !att._inline && att.kind !== "image").map((attachment) => (
+                    <span className="attachment-chip" key={attachment.id}>
+                      <AttachmentTypeIcon type={attachment.kind} filename={attachment.name} compact />
+                      <span className="chip-name">{attachment.name}</span>
+                      <button
+                        type="button"
+                        className="attachment-chip-remove"
+                        aria-label={`Remove ${attachment.name}`}
+                        onClick={() => onRemovePending(attachment)}
+                      >
+                        ×
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
             </div>
             <div className="composer-button-group">
               <button

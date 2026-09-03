@@ -1,8 +1,9 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import AttachmentList from "./AttachmentList";
 import RichTextEditor from "./RichTextEditor";
+import ShareModal from "./ShareModal";
 import { inlineImageAttachmentIds, richTextForDisplay, richTextHasText } from "../../lib/rich-text";
 
 function formatDate(value) {
@@ -24,31 +25,63 @@ export default function ItemCard({
   attachmentUrls,
   downloadingAttachments,
   onDownloadAttachment,
+  spaceId = "default",
+  onUpdateShare,
 }) {
   const [copied, setCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
   const [canExpand, setCanExpand] = useState(false);
+  const [showShareModal, setShowShareModal] = useState(false);
   const contentRef = useRef(null);
 
-  const itemContent = richTextForDisplay(item.content, item.contentFormat);
-  const inlineImageIds = inlineImageAttachmentIds(itemContent);
+  const itemContent = useMemo(() => {
+    const base = richTextForDisplay(item.content, item.contentFormat);
+    const existingInlineIds = inlineImageAttachmentIds(base);
+    const missingImages = (item.attachments || []).filter(
+      (att) => att.kind === "image" && !existingInlineIds.has(att.id)
+    );
+    if (!missingImages.length) return base;
+
+    const ops = [...(base.ops || [])];
+    const lastOp = ops[ops.length - 1];
+    if (lastOp && typeof lastOp.insert === "string" && !lastOp.insert.endsWith("\n")) {
+      ops[ops.length - 1] = { ...lastOp, insert: `${lastOp.insert}\n` };
+    }
+    missingImages.forEach((img) => {
+      ops.push({ insert: { s3Image: { attachmentId: img.id, alt: img.name || "Image" } } });
+      ops.push({ insert: "\n" });
+    });
+    return { ops };
+  }, [item.content, item.contentFormat, item.attachments]);
+
+  const inlineImageIds = useMemo(() => inlineImageAttachmentIds(itemContent), [itemContent]);
   const hasVisibleContent = richTextHasText(itemContent) || inlineImageIds.size > 0;
-  const displayedAttachments = item.attachments.filter(
-    (attachment) => !inlineImageIds.has(attachment.id)
-  );
+  const displayedAttachments = useMemo(() => (
+    (item.attachments || []).filter(
+      (attachment) => attachment.kind !== "image" && !inlineImageIds.has(attachment.id)
+    )
+  ), [item.attachments, inlineImageIds]);
 
   useEffect(() => {
     const el = contentRef.current;
-    if (!el) return;
 
     const checkCanExpand = () => {
       if (displayedAttachments.length > 0 || inlineImageIds.size > 0) {
         setCanExpand(true);
         return;
       }
-      if (el.scrollHeight > 60) {
+      const text = itemContent?.ops
+        ? itemContent.ops.map((op) => (typeof op.insert === "string" ? op.insert : "")).join("")
+        : "";
+      const lineCount = text.split("\n").filter((l) => l.trim().length > 0).length;
+      if (lineCount > 2 || text.trim().length > 90) {
         setCanExpand(true);
-      } else {
+        return;
+      }
+      if (!el) return;
+      if (el.scrollHeight > 54 || el.offsetHeight > 54) {
+        setCanExpand(true);
+      } else if (!isExpanded) {
         setCanExpand(false);
       }
     };
@@ -56,14 +89,17 @@ export default function ItemCard({
     checkCanExpand();
     const timer = setTimeout(checkCanExpand, 120);
 
-    const observer = new ResizeObserver(checkCanExpand);
-    observer.observe(el);
+    let observer = null;
+    if (el) {
+      observer = new ResizeObserver(checkCanExpand);
+      observer.observe(el);
+    }
 
     return () => {
       clearTimeout(timer);
-      observer.disconnect();
+      observer?.disconnect();
     };
-  }, [itemContent, displayedAttachments.length, inlineImageIds.size]);
+  }, [itemContent, displayedAttachments.length, inlineImageIds.size, isExpanded]);
 
   const EXPANDED_STORAGE_KEY = "notes-expanded-map";
 
@@ -125,6 +161,22 @@ export default function ItemCard({
 
   const isPreview = canExpand && !isExpanded;
 
+  const effectiveImageUrls = useMemo(() => {
+    const urls = { ...attachmentUrls };
+    if (item.attachments && Array.isArray(item.attachments)) {
+      for (const att of item.attachments) {
+        if (att?.thumbnail) {
+          if (!isExpanded) {
+            urls[att.id] = att.thumbnail;
+          } else if (!urls[att.id]) {
+            urls[att.id] = att.thumbnail;
+          }
+        }
+      }
+    }
+    return urls;
+  }, [attachmentUrls, item.attachments, isExpanded]);
+
   return (
     <article
       className={`item-card${isEditing ? " editing" : ""}${isExpanded ? " expanded" : ""}`}
@@ -162,8 +214,8 @@ export default function ItemCard({
                 e.stopPropagation();
                 setExpandedWithStorage((prev) => !prev);
               }}
-              title={isExpanded ? "Collapse note" : "Expand note"}
-              aria-label={isExpanded ? "Collapse note" : "Expand note"}
+              title={isExpanded ? "Thu gọn ghi chú" : "Mở rộng ghi chú"}
+              aria-label={isExpanded ? "Thu gọn ghi chú" : "Mở rộng ghi chú"}
             >
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
                 {isExpanded ? (
@@ -177,10 +229,29 @@ export default function ItemCard({
 
           <button
             type="button"
+            className={`item-action-btn btn-share${item.share?.enabled ? (item.share?.allowEdit ? " is-shared-edit" : " is-shared-readonly") : ""}`}
+            onClick={(e) => {
+              e.stopPropagation();
+              setShowShareModal(true);
+            }}
+            title={item.share?.enabled ? (item.share?.allowEdit ? "Đang chia sẻ (Cho phép chỉnh sửa)" : "Đang chia sẻ (Chỉ xem)") : "Chia sẻ ghi chú"}
+            aria-label={item.share?.enabled ? (item.share?.allowEdit ? "Đang chia sẻ (Cho phép chỉnh sửa)" : "Đang chia sẻ (Chỉ xem)") : "Chia sẻ ghi chú"}
+          >
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <circle cx="18" cy="5" r="3" />
+              <circle cx="6" cy="12" r="3" />
+              <circle cx="18" cy="19" r="3" />
+              <line x1="8.59" y1="13.51" x2="15.42" y2="17.49" />
+              <line x1="15.41" y1="6.51" x2="8.59" y2="10.49" />
+            </svg>
+          </button>
+
+          <button
+            type="button"
             className="item-action-btn"
             onClick={handleCopyText}
-            title={copied ? "Copied!" : "Copy note text"}
-            aria-label="Copy note text"
+            title={copied ? "Copied!" : "Copy text"}
+            aria-label="Copy text"
           >
             {copied ? (
               <svg viewBox="0 0 24 24" fill="none" stroke="var(--success)" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
@@ -196,10 +267,13 @@ export default function ItemCard({
 
           <button
             type="button"
-            className={`item-action-btn${isEditing ? " active" : ""}`}
-            onClick={() => onStartEdit(item)}
-            disabled={saving || reordering}
-            title={isEditing ? "Currently editing in composer" : "Edit note"}
+            className="item-action-btn"
+            onClick={(e) => {
+              e.stopPropagation();
+              onStartEdit(item);
+            }}
+            disabled={isEditing}
+            title="Edit note"
             aria-label="Edit note"
           >
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -211,8 +285,11 @@ export default function ItemCard({
           <button
             type="button"
             className="item-action-btn btn-delete"
-            onClick={() => onDelete(item)}
-            disabled={saving || reordering}
+            onClick={(e) => {
+              e.stopPropagation();
+              onDelete(item);
+            }}
+            disabled={isEditing}
             title="Delete note"
             aria-label="Delete note"
           >
@@ -237,20 +314,12 @@ export default function ItemCard({
           {hasVisibleContent && (
             <RichTextEditor
               value={itemContent}
-              imageUrls={attachmentUrls}
+              imageUrls={effectiveImageUrls}
               readOnly
               ariaLabel="Note content"
             />
           )}
 
-          {isPreview && displayedAttachments.length > 0 && (
-            <div className="item-preview-attachment-badge">
-              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                <path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48" />
-              </svg>
-              <span>{displayedAttachments.length} {displayedAttachments.length === 1 ? "file" : "files"}</span>
-            </div>
-          )}
 
           {isExpanded && displayedAttachments.length > 0 && (
             <AttachmentList
@@ -262,6 +331,15 @@ export default function ItemCard({
           )}
         </div>
       </div>
+
+      {showShareModal && (
+        <ShareModal
+          item={item}
+          spaceId={spaceId}
+          onClose={() => setShowShareModal(false)}
+          onUpdateShare={onUpdateShare}
+        />
+      )}
     </article>
   );
 }

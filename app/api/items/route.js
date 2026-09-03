@@ -68,6 +68,9 @@ function normalizeAttachment(value, spaceId) {
     name: typeof value.name === "string" ? value.name.slice(0, 180) : "Attachment",
     contentType,
     size: Number.isFinite(value.size) ? Math.max(0, value.size) : 0,
+    ...(typeof value.thumbnail === "string" && value.thumbnail.startsWith("data:image/")
+      ? { thumbnail: value.thumbnail.slice(0, 60_000) }
+      : {}),
   };
 }
 
@@ -148,7 +151,7 @@ export async function GET(request) {
   try {
     const spaceId = getAccessSpace(request);
     const { getItems } = await import("../../../lib/s3-notes");
-    return response({ items: await getItems(spaceId) });
+    return response({ items: await getItems(spaceId), spaceId: spaceId || "default" });
   } catch (error) {
     return errorResponse(error);
   }
@@ -196,7 +199,7 @@ export async function PATCH(request) {
     const spaceId = getAccessSpace(request);
     const input = await body(request);
     if (
-      !["edit-item", "delete-item", "reorder-item"].includes(input.action)
+      !["edit-item", "delete-item", "reorder-item", "update-share"].includes(input.action)
       || typeof input.id !== "string"
       || (input.action === "reorder-item" && input.beforeId != null && typeof input.beforeId !== "string")
       || (input.action === "reorder-item" && input.beforeId === input.id)
@@ -212,6 +215,28 @@ export async function PATCH(request) {
       const index = items.findIndex((entry) => entry.id === input.id);
       if (index === -1) {
         return { abort: true, notFound: true };
+      }
+
+      if (input.action === "update-share") {
+        const currentItem = items[index];
+        const prevShare = currentItem.share || {};
+        let token = prevShare.token;
+        if (!token || input.regenerateToken) {
+          token = randomUUID().replace(/-/g, "");
+        }
+        const updatedShare = {
+          enabled: Boolean(input.enabled),
+          allowEdit: Boolean(input.allowEdit),
+          token,
+          updatedAt: new Date().toISOString(),
+        };
+        const item = {
+          ...currentItem,
+          share: updatedShare,
+        };
+        items[index] = item;
+        updatedItem = item;
+        return { nextItems: items, item, isShareUpdate: true };
       }
 
       if (input.action === 'delete-item') {
