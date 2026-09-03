@@ -66,8 +66,12 @@ export default function ItemCard({
     const el = contentRef.current;
 
     const checkCanExpand = () => {
-      if (displayedAttachments.length > 0 || inlineImageIds.size > 0) {
+      if (hasVisibleContent && (displayedAttachments.length > 0 || inlineImageIds.size > 0)) {
         setCanExpand(true);
+        return;
+      }
+      if (!hasVisibleContent) {
+        setCanExpand(displayedAttachments.length > 1);
         return;
       }
       const text = itemContent?.ops
@@ -99,7 +103,7 @@ export default function ItemCard({
       clearTimeout(timer);
       observer?.disconnect();
     };
-  }, [itemContent, displayedAttachments.length, inlineImageIds.size, isExpanded]);
+  }, [hasVisibleContent, itemContent, displayedAttachments.length, inlineImageIds.size, isExpanded]);
 
   const EXPANDED_STORAGE_KEY = "notes-expanded-map";
 
@@ -321,7 +325,7 @@ export default function ItemCard({
           )}
 
 
-          {isExpanded && displayedAttachments.length > 0 && (
+          {(!hasVisibleContent || isExpanded) && displayedAttachments.length > 0 && (
             <AttachmentList
               attachments={displayedAttachments}
               attachmentUrls={attachmentUrls}

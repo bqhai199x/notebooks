@@ -680,6 +680,16 @@ h1, h2, h3, p, ol, ul {
   margin: 2px 0;
 }
 
+.item-card-content > .attachments-wrapper:first-child {
+  margin-top: 1px !important;
+}
+
+.item-card-content.is-preview:has(.attachments-wrapper:first-child) {
+  max-height: 60px;
+  mask-image: linear-gradient(to bottom, black calc(100% - 12px), transparent 100%);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 12px), transparent 100%);
+}
+
 .item-card-content.is-expanded {
   max-height: none !important;
   overflow: visible !important;
@@ -1756,6 +1766,10 @@ h1, h2, h3, p, ol, ul {
   .item-card-content.is-preview {
     max-height: 48px;
     overflow: hidden;
+  }
+
+  .item-card-content.is-preview:has(.attachments-wrapper:first-child) {
+    max-height: 56px;
   }
 
   .item-card-content.is-expanded {
