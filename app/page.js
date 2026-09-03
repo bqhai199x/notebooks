@@ -561,6 +561,13 @@ export default function Home() {
       setLoading(false);
     }
 
+    try {
+      const savedComposer = localStorage.getItem("notes-composer-expanded");
+      if (savedComposer !== null) {
+        setComposerExpanded(savedComposer === "true");
+      }
+    } catch {}
+
     return () => {
       objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
     };
@@ -846,6 +853,14 @@ export default function Home() {
         body: JSON.stringify({ action: "delete-item", id: item.id }),
       });
       removeAttachmentUrls(item.attachments);
+      try {
+        const raw = localStorage.getItem("notes-expanded-map");
+        if (raw) {
+          const map = JSON.parse(raw);
+          delete map[item.id];
+          localStorage.setItem("notes-expanded-map", JSON.stringify(map));
+        }
+      } catch {}
       setItems((current) => {
         const nextItems = current.filter((entry) => entry.id !== item.id);
         itemsRef.current = nextItems;
@@ -1079,6 +1094,9 @@ export default function Home() {
         <ItemComposer
           expanded={composerExpanded}
           onExpandedChange={(next) => {
+            try {
+              localStorage.setItem("notes-composer-expanded", String(next));
+            } catch {}
             if (!next && editingId) {
               cancelEdit();
             } else {
