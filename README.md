@@ -1,110 +1,100 @@
-# Notes
+# Notes (Google Drive Edition)
 
-A responsive private list app for desktop and mobile. One flat list contains rich-text notes, files, images, and links.
+A responsive private list app for desktop and mobile. One flat list contains rich-text notes, files, images, and links, backed by **Google Drive API v3**.
 
 Attachments are stored until their item is deleted. The browser retrieves each attachment through the authenticated app API, so there are no expiring attachment links in the UI.
 
-Uploads go directly from the device to S3. The app API first verifies the access key and issues a short-lived signed URL, so Vercel Functions never receive the file body. Files larger than 16 MB use S3 multipart upload automatically.
+Data is stored as a JSON file (`sessions.json`) and an `uploads/` folder in your designated Google Drive folder.
 
-Notes use Quill. Images added from its toolbar, paste, or drag-and-drop are represented by an attachment ID in the stored Quill Delta; the editor never stores Base64, blob URLs, or expiring signed URLs. A temporary browser blob preview is used before saving, then the original file is uploaded directly to S3 with the same attachment pipeline as regular files.
+## Features
+- **Google Drive Storage**: Uses personal Google Drive (15 GB free) via OAuth 2.0 or Google Workspace Shared Drive via Service Account.
+- **Rich-text with Quill**: Embed images, checklists, formatting, and file attachments without leaking Base64 strings.
+- **Optimistic Concurrency Control**: Prevents accidental overwrites using ETag / If-Match.
+- **Multi-space / Multi-key isolation**: Easily partition notes into different spaces (e.g. Work, Personal) using different access keys.
+- **Shareable notes**: Generate share links with customizable read or edit permissions.
 
-## iPhone and iPad home-screen app
-
-Open the deployed site in Safari, tap **Share**, then choose **Add to Home Screen**. It opens in standalone mode with a dedicated Notes icon, app title, theme color, safe-area viewport, and pull-to-refresh.
-
-## Local setup
+## Quick Setup (Local Development)
 
 ```powershell
-cd s3-notes
 Copy-Item .env.example .env.local
-npm install
-npm run dev
+npm.cmd install
 ```
 
-Fill in `.env.local` before opening `http://localhost:3000`.
+### 1. Google Cloud Console Setup
+1. Go to [Google Cloud Console](https://console.cloud.google.com/) and create a new project.
+2. In **APIs & Services > Library**, search for **Google Drive API** and click **Enable**.
+3. In **APIs & Services > OAuth consent screen**:
+   - Choose **External** user type.
+   - Enter App name and your email address.
+   - In the **Test users** step, add your own Google email.
+   - *(Optional tip: click "Publish App" so your refresh token never expires after 7 days)*.
+4. In **APIs & Services > Credentials**:
+   - Click **Create Credentials > OAuth client ID**.
+   - Application type: **Desktop app**.
+   - Copy the generated **Client ID** and **Client Secret**.
 
-## Vercel environment variables
+### 2. Google Drive Folder
+1. Open [Google Drive](https://drive.google.com/) and create a folder for your notes (e.g. `MyNotesData`).
+2. Copy the Folder ID from the URL (`https://drive.google.com/drive/folders/<GOOGLE_DRIVE_FOLDER_ID>`).
+3. Set `GOOGLE_DRIVE_FOLDER_ID` in `.env.local`.
 
-Add these in **Project Settings > Environment Variables**:
+### 3. Generate Refresh Token
+Run the built-in CLI assistant:
 
-```text
-AWS_REGION=ap-southeast-1
-S3_BUCKET=your-private-bucket
-S3_NOTES_KEY=notes/sessions.json
-S3_UPLOAD_PREFIX=notes/uploads
-MAX_UPLOAD_BYTES=1073741824
-NOTES_ACCESS_KEY=a-long-random-secret
-AWS_ACCESS_KEY_ID=...
-AWS_SECRET_ACCESS_KEY=...
+```bash
+npm.cmd run auth:gdrive
 ```
+Follow the terminal prompt: enter your Client ID & Client Secret, authenticate in the browser, and the script will automatically save your `GOOGLE_REFRESH_TOKEN` into `.env.local`!
+
+### 4. Start the App
+```bash
+npm.cmd run dev
+```
+Open `http://localhost:3000` and unlock your notebook using the `NOTES_ACCESS_KEY` configured in `.env.local`.
+
+---
+
+## Environment Variables
+
+| Variable | Description |
+| :--- | :--- |
+| `GOOGLE_DRIVE_FOLDER_ID` | ID of the Google Drive folder to store notes and uploads |
+| `GOOGLE_CLIENT_ID` | OAuth 2.0 Client ID from Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | OAuth 2.0 Client Secret from Google Cloud Console |
+| `GOOGLE_REFRESH_TOKEN` | OAuth 2.0 Refresh Token generated via `npm run auth:gdrive` |
+| `NOTES_ACCESS_KEY` | Secret passcode to unlock the app |
+| `NOTES_ACCESS_KEYS` | (Optional) Multiple access keys mapped to distinct spaces |
+| `MAX_UPLOAD_BYTES` | Maximum size of an uploaded attachment in bytes (default: 1 GB) |
 
 ### Single or Multiple Access Keys & Data Spaces
 
-You can configure single or multiple access keys. Each key accesses an isolated data space in S3:
-
-1. **Single key (Default / Legacy)**:
+1. **Single key (Default)**:
    ```text
    NOTES_ACCESS_KEY=my-secret-key
    ```
-   Uses standard `notes/sessions.json` and `notes/uploads/*`.
+   Uses `sessions.json` and `uploads/` folder in your Drive folder.
 
 2. **Multiple keys with auto-partitioned spaces**:
    ```text
    NOTES_ACCESS_KEYS=secretKeyA,secretKeyB,secretKeyC
    ```
-   Each key gets its own isolated space in S3.
+   Each key gets its own isolated files and folders in Google Drive (`sessions_<spaceId>.json` and `uploads_<spaceId>/`).
 
 3. **Multiple keys with custom named spaces**:
    ```text
    NOTES_ACCESS_KEYS=work:work-secret-123, personal:personal-secret-456
    ```
-   Or using JSON:
-   ```text
-   NOTES_ACCESS_KEYS={"work-secret-123": "work", "personal-secret-456": "personal"}
-   ```
-   Data is stored under `notes/spaces/<spaceId>/sessions.json` and `notes/spaces/<spaceId>/uploads/*`.
 
-## Required IAM policy
+---
 
-Replace `your-private-bucket` if needed:
+## Deploy to Vercel
 
-```json
-{
-  "Version": "2012-10-17",
-  "Statement": [
-    {
-      "Effect": "Allow",
-      "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject", "s3:AbortMultipartUpload"],
-      "Resource": [
-        "arn:aws:s3:::your-private-bucket/notes/*"
-      ]
-    }
-  ]
-}
-```
-
-The bucket remains private. The API verifies the access key before issuing every signed upload URL. Add this S3 CORS rule for browser and native-mobile uploads:
-
-```json
-[
-  {
-    "AllowedHeaders": ["content-type", "content-disposition", "x-amz-server-side-encryption"],
-    "AllowedMethods": ["PUT"],
-    "AllowedOrigins": ["*"],
-    "ExposeHeaders": ["ETag"],
-    "MaxAgeSeconds": 3000
-  }
-]
-```
-
-`MAX_UPLOAD_BYTES` is the per-file cap in bytes; it defaults to 1 GiB when omitted. There is no extension or MIME whitelist. Signed URLs expire after 15 minutes.
-
-`AllowedOrigins: ["*"]` is compatible with any browser, local network host, and native app. It does not make the bucket public: a valid, short-lived signed URL is still required. If the app only runs on fixed web domains, replacing `*` with those exact origins is stricter.
-
-For housekeeping, add an S3 lifecycle rule that aborts incomplete multipart uploads after one day.
-
-## Deploy
-
-Push `s3-notes` to a Git repository, import it into Vercel, set the variables above, configure the bucket CORS rule, then deploy.
-
-This design is best for a personal list or a small shared group. Multiple simultaneous writers can overwrite each other; use an authenticated database for collaborative editing at scale.
+1. Push this project to GitHub.
+2. Import the repository into Vercel.
+3. In **Project Settings > Environment Variables**, add:
+   - `GOOGLE_DRIVE_FOLDER_ID`
+   - `GOOGLE_CLIENT_ID`
+   - `GOOGLE_CLIENT_SECRET`
+   - `GOOGLE_REFRESH_TOKEN`
+   - `NOTES_ACCESS_KEY`
+4. Deploy!

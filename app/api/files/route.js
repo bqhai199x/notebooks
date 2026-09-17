@@ -29,24 +29,28 @@ export async function GET(request) {
     if (!key) return response({ error: "File not found." }, 400);
 
     if (search.get("download") === "1") {
-      const { getAttachmentDownloadUrl } = await import("../../../lib/s3-notes");
+      const { getAttachmentDownloadUrl } = await import("../../../lib/gdrive-notes");
       const url = await getAttachmentDownloadUrl({ key, spaceId });
       return response({ url });
     }
 
-    const { getAttachment } = await import("../../../lib/s3-notes");
-    const file = await getAttachment({ key, spaceId });
-
     const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch && file.eTag && (ifNoneMatch === file.eTag || ifNoneMatch === `"${file.eTag}"` || ifNoneMatch === file.eTag.replace(/^"|"$/g, ""))) {
-      return new NextResponse(null, {
-        status: 304,
-        headers: {
-          "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
-          "ETag": file.eTag,
-        },
-      });
+    if (ifNoneMatch) {
+      const { getAttachmentMeta } = await import("../../../lib/gdrive-notes");
+      const meta = await getAttachmentMeta({ key, spaceId });
+      if (meta.eTag && (ifNoneMatch === meta.eTag || ifNoneMatch === `"${meta.eTag}"` || ifNoneMatch === meta.eTag.replace(/^"|"$/g, ""))) {
+        return new NextResponse(null, {
+          status: 304,
+          headers: {
+            "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+            "ETag": meta.eTag,
+          },
+        });
+      }
     }
+
+    const { getAttachment } = await import("../../../lib/gdrive-notes");
+    const file = await getAttachment({ key, spaceId });
 
     const stream = typeof file.body.transformToWebStream === "function"
       ? file.body.transformToWebStream()

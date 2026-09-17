@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
@@ -33,26 +34,44 @@ function authorize(request) {
   return null;
 }
 
-function validParts(parts) {
-  if (!Array.isArray(parts) || !parts.length || parts.length > 10_000) return false;
-  const partNumbers = new Set();
-  return parts.every((part) => {
-    if (!part || typeof part !== "object") return false;
-    const { partNumber, eTag } = part;
-    if (!Number.isInteger(partNumber) || partNumber <= 0 || partNumber > 10_000 || partNumbers.has(partNumber)) {
-      return false;
-    }
-    if (typeof eTag !== "string" || !eTag.length || eTag.length > 1024) return false;
-    partNumbers.add(partNumber);
-    return true;
-  });
-}
-
 export async function POST(request) {
   const denied = authorize(request);
   if (denied) return denied;
 
   const spaceId = getAccessSpace(request);
+  const reqContentType = request.headers.get("content-type") || "";
+
+  // 1. Direct FormData upload (tối ưu cho ảnh và file thông thường, không lo vấn đề CORS trình duyệt)
+  if (reqContentType.includes("multipart/form-data")) {
+    try {
+      const formData = await request.formData();
+      const file = formData.get("file");
+      if (!file || typeof file === "string") {
+        return response({ error: "Choose a non-empty file first." }, 400);
+      }
+      if (file.size > maxUploadBytes()) {
+        return response({ error: `Each file is limited to ${readableSize(maxUploadBytes())}.` }, 413);
+      }
+
+      const stream = Readable.fromWeb(file.stream());
+      const { uploadAttachmentDirect } = await import("../../../lib/gdrive-notes");
+      const attachment = await uploadAttachmentDirect({
+        id: randomUUID(),
+        name: file.name,
+        contentType: file.type,
+        data: stream,
+        size: file.size,
+        spaceId,
+      });
+
+      return response({ attachment }, 201);
+    } catch (error) {
+      console.error("Direct upload error:", error);
+      return response({ error: "Upload failed: " + (error.message || "Unknown error") }, 500);
+    }
+  }
+
+  // 2. JSON actions (initiate session, complete, abort)
   const body = await request.json().catch(() => null);
   if (!body || typeof body !== "object") return response({ error: "Invalid upload request." }, 400);
 
@@ -66,34 +85,28 @@ export async function POST(request) {
         return response({ error: `Each file is limited to ${readableSize(maxUploadBytes())}.` }, 413);
       }
 
-      const { createAttachmentUpload } = await import("../../../lib/s3-notes");
+      const origin = request.headers.get("origin") || undefined;
+      const { createAttachmentUpload } = await import("../../../lib/gdrive-notes");
       const result = await createAttachmentUpload({
         id: randomUUID(),
         name: typeof body.name === "string" ? body.name : "file",
         contentType: typeof body.contentType === "string" ? body.contentType : "",
         size,
         spaceId,
+        origin,
       });
       return response(result, 201);
     }
 
     if (body.action === "complete") {
-      if (typeof body.key !== "string" || typeof body.uploadId !== "string" || !validParts(body.parts)) {
-        return response({ error: "Invalid multipart upload." }, 400);
-      }
-
-      const { completeAttachmentUpload } = await import("../../../lib/s3-notes");
-      await completeAttachmentUpload({ key: body.key, uploadId: body.uploadId, parts: body.parts, spaceId });
+      const { completeAttachmentUpload } = await import("../../../lib/gdrive-notes");
+      await completeAttachmentUpload();
       return response({ success: true });
     }
 
     if (body.action === "abort") {
-      if (typeof body.key !== "string" || typeof body.uploadId !== "string") {
-        return response({ error: "Invalid multipart upload." }, 400);
-      }
-
-      const { abortAttachmentUpload } = await import("../../../lib/s3-notes");
-      await abortAttachmentUpload({ key: body.key, uploadId: body.uploadId, spaceId });
+      const { abortAttachmentUpload } = await import("../../../lib/gdrive-notes");
+      await abortAttachmentUpload({ key: body.key });
       return response({ success: true });
     }
 
@@ -113,7 +126,7 @@ export async function DELETE(request) {
     const key = new URL(request.url).searchParams.get("key");
     if (!key) return response({ error: "Missing file." }, 400);
 
-    const { deleteAttachments } = await import("../../../lib/s3-notes");
+    const { deleteAttachments } = await import("../../../lib/gdrive-notes");
     await deleteAttachments([key], spaceId);
     return response({ success: true });
   } catch (error) {

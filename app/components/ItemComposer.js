@@ -16,12 +16,11 @@ export default function ItemComposer({
   onSelectFiles,
   attachmentUrls,
   saving,
-  uploading,
   notice,
   editingItem = null,
   onCancelEdit,
 }) {
-  const canSubmit = !saving && !uploading && (richTextHasText(draft) || pending.length > 0);
+  const canSubmit = richTextHasText(draft) || pending.length > 0;
 
   const handleClose = () => {
     if (editingItem) {
@@ -75,13 +74,14 @@ export default function ItemComposer({
             imageUrls={attachmentUrls}
             placeholder={editingItem ? "Edit note content..." : "Write note content here..."}
             ariaLabel={editingItem ? "Edit note content" : "Add a new note"}
-            disabled={saving || uploading}
+            disabled={false}
             collapsible={!editingItem}
             collapsed={false}
             onCollapsedChange={(nextCollapsed) => onExpandedChange(!nextCollapsed)}
             collapseControlsId="new-note-editor"
             autoFocus={true}
             autoFocusTrigger={editingItem ? `edit-${editingItem.id}` : "new-note"}
+            onSubmit={canSubmit ? onAddItem : undefined}
           />
 
           <div className="composer-bottom-bar">
@@ -111,7 +111,6 @@ export default function ItemComposer({
                 type="button"
                 className="btn-composer-icon btn-cancel"
                 onClick={handleClose}
-                disabled={saving || uploading}
                 title={editingItem ? "Cancel edit" : "Close"}
                 aria-label={editingItem ? "Cancel edit" : "Close"}
               >
@@ -128,9 +127,7 @@ export default function ItemComposer({
                 title={editingItem ? "Update note" : "Add note"}
                 aria-label={editingItem ? "Update note" : "Add note"}
               >
-                {saving || uploading ? (
-                  <span className="spinner-icon" />
-                ) : editingItem ? (
+                {editingItem ? (
                   <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                     <polyline points="20 6 9 17 4 12" />
                   </svg>

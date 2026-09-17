@@ -31,7 +31,7 @@ export async function GET(request) {
       return response({ error: "Thiếu thông tin liên kết chia sẻ." }, 400);
     }
 
-    const { getItems } = await import("../../../lib/s3-notes");
+    const { getItems } = await import("../../../lib/gdrive-notes");
     let items = await getItems(spaceId);
     let item = items.find((entry) => entry.id === id);
 
@@ -86,7 +86,7 @@ export async function PATCH(request) {
     const prepared = prepareRichTextContent(content ?? "", contentFormat);
 
     let updatedItem = null;
-    const { getItemsWithMeta, saveItems, getItems } = await import("../../../lib/s3-notes");
+    const { getItemsWithMeta, saveItems, getItems } = await import("../../../lib/gdrive-notes");
 
     // Verify space where item actually resides
     let itemsCheck = await getItems(spaceId);
@@ -141,7 +141,10 @@ export async function PATCH(request) {
         await saveItems(items, eTag ? { expectedETag: eTag } : {}, spaceId);
         break;
       } catch (error) {
-        const isPrecondition = error?.name === "PreconditionFailed" || error?.$metadata?.httpStatusCode === 412;
+        const isPrecondition = error?.name === "PreconditionFailed"
+          || error?.$metadata?.httpStatusCode === 412
+          || error?.status === 412
+          || error?.code === 412;
         if (isPrecondition && attempt < 2) {
           await new Promise((res) => setTimeout(res, 50 * (attempt + 1)));
           continue;

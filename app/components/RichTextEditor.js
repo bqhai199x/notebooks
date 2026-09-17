@@ -46,6 +46,18 @@ function registerS3ImageBlot(Quill) {
   }
 
   Quill.register(S3Image, true);
+
+  const Link = Quill.import("formats/link");
+  class CustomLink extends Link {
+    static create(value) {
+      const node = super.create(value);
+      node.setAttribute("target", "_blank");
+      node.setAttribute("rel", "noopener noreferrer");
+      return node;
+    }
+  }
+  Quill.register(CustomLink, true);
+
   icons.file = [
     '<svg viewBox="0 0 18 18" aria-hidden="true">',
     '<path class="ql-stroke" d="M15.5 11.5v3a1.5 1.5 0 0 1-1.5 1.5h-10A1.5 1.5 0 0 1 2.5 14.5v-3" />',
@@ -163,6 +175,7 @@ export default function RichTextEditor({
   collapseControlsId,
   autoFocus = false,
   autoFocusTrigger,
+  onSubmit,
 }) {
   const hostRef = useRef(null);
   const quillRef = useRef(null);
@@ -181,7 +194,9 @@ export default function RichTextEditor({
   const onCollapsedChangeRef = useRef(onCollapsedChange);
   const collapseControlsIdRef = useRef(collapseControlsId);
   const autoFocusRef = useRef(autoFocus);
+  const onSubmitRef = useRef(onSubmit);
   autoFocusRef.current = autoFocus;
+  onSubmitRef.current = onSubmit;
 
   valueRef.current = value;
   onChangeRef.current = onChange;
@@ -199,6 +214,7 @@ export default function RichTextEditor({
     let disposed = false;
     let editor = null;
     let stopImageDrop = null;
+    let handlePaste = null;
     let pickersObserver = null;
 
     async function createEditor() {
@@ -266,6 +282,18 @@ export default function RichTextEditor({
 
       editor.enable(!disabledRef.current);
 
+      editor.keyboard.addBinding({
+        key: 13,
+        shortKey: true,
+        handler: () => {
+          if (onSubmitRef.current) {
+            onSubmitRef.current();
+            return false;
+          }
+          return true;
+        },
+      });
+
       const insertImages = async (range, files) => {
         const images = Array.from(files || []).filter((file) => file?.type?.startsWith("image/"));
         if (!images.length || disposed || !editor.isEnabled()) return;
@@ -303,6 +331,83 @@ export default function RichTextEditor({
 
       const Delta = Quill.import("delta");
       editor.clipboard.addMatcher("IMG", () => new Delta());
+
+      // Auto-link: when pasting plain text containing URLs, convert them into hyperlinks
+      editor.clipboard.addMatcher(Node.TEXT_NODE, (node, delta) => {
+        const text = typeof node?.data === "string" ? node.data : (typeof node?.textContent === "string" ? node.textContent : "");
+        if (!text) return delta;
+        const hasLink = delta?.ops?.some((op) => op.attributes?.link);
+        if (hasLink) return delta;
+        if (node.parentElement?.tagName === "A") return delta;
+
+        const regex = /(?:https?:\/\/|www\.)[^\s<>"]+/gi;
+        if (!regex.test(text)) return delta;
+
+        const newDelta = new Delta();
+        let lastIndex = 0;
+        let match;
+        regex.lastIndex = 0;
+        while ((match = regex.exec(text)) !== null) {
+          const rawUrl = match[0];
+          const matchIndex = match.index;
+          if (matchIndex > lastIndex) {
+            newDelta.insert(text.slice(lastIndex, matchIndex));
+          }
+
+          let cleanUrl = rawUrl;
+          let trailing = "";
+          const trailingMatch = cleanUrl.match(/[.,;:!?)]+$/);
+          if (trailingMatch) {
+            trailing = trailingMatch[0];
+            cleanUrl = cleanUrl.slice(0, -trailing.length);
+          }
+
+          const href = /^https?:\/\//i.test(cleanUrl) ? cleanUrl : `https://${cleanUrl}`;
+          newDelta.insert(cleanUrl, { link: href });
+          if (trailing) {
+            newDelta.insert(trailing);
+          }
+          lastIndex = matchIndex + rawUrl.length;
+        }
+        if (lastIndex < text.length) {
+          newDelta.insert(text.slice(lastIndex));
+        }
+        return newDelta;
+      });
+
+      // Smart link: when user pastes a URL (single URL or onto selected text)
+      handlePaste = (event) => {
+        if (event.clipboardData?.files?.length > 0) return;
+        const pastedText = event.clipboardData?.getData("text/plain");
+        if (!pastedText) return;
+
+        const trimmed = pastedText.trim();
+        const isSingleUrl = /^(?:https?:\/\/|www\.)[^\s<>"]+$/i.test(trimmed);
+
+        if (isSingleUrl) {
+          event.preventDefault();
+          event.stopPropagation();
+
+          let cleanUrl = trimmed;
+          const trailingMatch = cleanUrl.match(/[.,;:!?)]+$/);
+          if (trailingMatch) {
+            cleanUrl = cleanUrl.slice(0, -trailingMatch[0].length);
+          }
+          const targetHref = /^https?:\/\//i.test(cleanUrl) ? cleanUrl : `https://${cleanUrl}`;
+
+          const selection = editor.getSelection();
+          if (selection && selection.length > 0) {
+            editor.formatText(selection.index, selection.length, "link", targetHref, "user");
+            editor.setSelection(selection.index + selection.length, 0, "user");
+          } else {
+            const index = selection ? selection.index : editor.getLength() - 1;
+            editor.insertText(index, cleanUrl, { link: targetHref }, "user");
+            editor.setSelection(index + cleanUrl.length, 0, "user");
+          }
+          return;
+        }
+      };
+      editor.root.addEventListener("paste", handlePaste, { capture: true });
 
       stopImageDrop = (event) => {
         const files = Array.from(event.dataTransfer?.files || []);
@@ -469,6 +574,7 @@ export default function RichTextEditor({
       disposed = true;
       pickersObserver?.disconnect();
       if (editor?.root && stopImageDrop) editor.root.removeEventListener("drop", stopImageDrop);
+      if (editor?.root && handlePaste) editor.root.removeEventListener("paste", handlePaste, { capture: true });
       editor?.getModule("toolbar")?.container?.remove();
       if (insertImagesRef.current) insertImagesRef.current = null;
       if (quillRef.current === editor) quillRef.current = null;

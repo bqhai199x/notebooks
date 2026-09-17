@@ -138,7 +138,7 @@ export default function SharePage({ params, searchParams }) {
 
   const handleDownloadAttachment = async (attachment) => {
     if (!attachment?.key) return;
-    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(id)}&token=${encodeURIComponent(token)}&space=${encodeURIComponent(space)}&download=1`;
+    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1`;
     try {
       const res = await fetch(downloadUrl);
       const data = await res.json();

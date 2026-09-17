@@ -17,9 +17,9 @@ export default function ItemCard({
   item,
   index,
   isEditing = false,
+  isDeleting = false,
   reordering,
   saving,
-  uploading,
   onStartEdit,
   onDelete,
   attachmentUrls,
@@ -27,6 +27,9 @@ export default function ItemCard({
   onDownloadAttachment,
   spaceId = "default",
   onUpdateShare,
+  onCancelSync,
+  onRetrySync,
+  onDiscardSync,
 }) {
   const [copied, setCopied] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
@@ -164,12 +167,16 @@ export default function ItemCard({
   };
 
   const isPreview = canExpand && !isExpanded;
+  const isSyncing = item._syncStatus === "syncing";
+  const isSyncError = item._syncStatus === "error";
 
   const effectiveImageUrls = useMemo(() => {
     const urls = { ...attachmentUrls };
     if (item.attachments && Array.isArray(item.attachments)) {
       for (const att of item.attachments) {
-        if (att?.thumbnail) {
+        if (att?._previewUrl) {
+          urls[att.id] = att._previewUrl;
+        } else if (att?.thumbnail) {
           if (!isExpanded) {
             urls[att.id] = att.thumbnail;
           } else if (!urls[att.id]) {
@@ -183,7 +190,7 @@ export default function ItemCard({
 
   return (
     <article
-      className={`item-card${isEditing ? " editing" : ""}${isExpanded ? " expanded" : ""}`}
+      className={`item-card${isEditing ? " editing" : ""}${isExpanded ? " expanded" : ""}${isSyncing ? " syncing" : ""}${isSyncError ? " sync-error" : ""}`}
       data-item-id={item.id}
     >
       <div
@@ -193,7 +200,7 @@ export default function ItemCard({
       >
         <div className="item-header-left">
           <span
-            className={`item-drag-handle${reordering ? " disabled" : ""}`}
+            className={`item-drag-handle${reordering || isSyncing ? " disabled" : ""}`}
             title="Drag to reorder"
             aria-label="Drag to reorder note"
           >
@@ -206,10 +213,29 @@ export default function ItemCard({
               <circle cx="15" cy="19" r="1" />
             </svg>
           </span>
-          <span className="item-timestamp">{formatDate(item.createdAt)}</span>
+          <span className="item-timestamp">
+            {isSyncError ? (
+              <span className="item-sync-badge item-sync-badge-error">
+                <span>Chưa lưu</span>
+              </span>
+            ) : (
+              formatDate(item.createdAt)
+            )}
+          </span>
         </div>
 
         <div className="item-header-actions">
+          {isSyncing && (
+            <span
+              className="item-sync-spinner-icon"
+              title="Đang đồng bộ..."
+              aria-label="Đang đồng bộ"
+            >
+              <svg className="composer-upload-spinner" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+              </svg>
+            </span>
+          )}
           {canExpand && (
             <button
               type="button"
@@ -238,6 +264,7 @@ export default function ItemCard({
               e.stopPropagation();
               setShowShareModal(true);
             }}
+            disabled={isSyncing || isSyncError}
             title={item.share?.enabled ? (item.share?.allowEdit ? "Đang chia sẻ (Cho phép chỉnh sửa)" : "Đang chia sẻ (Chỉ xem)") : "Chia sẻ ghi chú"}
             aria-label={item.share?.enabled ? (item.share?.allowEdit ? "Đang chia sẻ (Cho phép chỉnh sửa)" : "Đang chia sẻ (Chỉ xem)") : "Chia sẻ ghi chú"}
           >
@@ -276,7 +303,7 @@ export default function ItemCard({
               e.stopPropagation();
               onStartEdit(item);
             }}
-            disabled={isEditing}
+            disabled={isEditing || isSyncing}
             title="Edit note"
             aria-label="Edit note"
           >
@@ -293,17 +320,23 @@ export default function ItemCard({
               e.stopPropagation();
               onDelete(item);
             }}
-            disabled={isEditing}
-            title="Delete note"
-            aria-label="Delete note"
+            disabled={isEditing || isSyncing || isDeleting}
+            title={isDeleting ? "Đang xóa..." : "Delete note"}
+            aria-label={isDeleting ? "Đang xóa..." : "Delete note"}
           >
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M3 6h18" />
-              <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
-              <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
-              <line x1="10" y1="11" x2="10" y2="17" />
-              <line x1="14" y1="11" x2="14" y2="17" />
-            </svg>
+            {isDeleting ? (
+              <svg className="composer-upload-spinner" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5">
+                <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+              </svg>
+            ) : (
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M3 6h18" />
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6" />
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2" />
+                <line x1="10" y1="11" x2="10" y2="17" />
+                <line x1="14" y1="11" x2="14" y2="17" />
+              </svg>
+            )}
           </button>
         </div>
       </div>
@@ -324,7 +357,6 @@ export default function ItemCard({
             />
           )}
 
-
           {(!hasVisibleContent || isExpanded) && displayedAttachments.length > 0 && (
             <AttachmentList
               attachments={displayedAttachments}
@@ -334,6 +366,84 @@ export default function ItemCard({
             />
           )}
         </div>
+
+        {isSyncing && item._uploadProgress && (
+          <div className="item-sync-status item-upload-progress">
+            <div className="item-upload-progress-info">
+              <span className="item-upload-progress-name">
+                <svg className="composer-upload-spinner" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                </svg>
+                Đang tải lên {item._uploadProgress.total > 1 ? `(${item._uploadProgress.current}/${item._uploadProgress.total}) ` : ""}
+                {item._uploadProgress.name}
+              </span>
+              <div className="item-upload-progress-actions">
+                <span className="item-upload-progress-pct">{item._uploadProgress.percent}%</span>
+                {onCancelSync && (
+                  <button
+                    type="button"
+                    className="btn-cancel-upload"
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onCancelSync(item.id);
+                    }}
+                    title="Hủy tải lên"
+                    aria-label="Hủy tải lên"
+                  >
+                    Hủy
+                  </button>
+                )}
+              </div>
+            </div>
+            <div className="item-upload-progress-track">
+              <div
+                className="item-upload-progress-bar"
+                style={{ width: `${Math.max(4, item._uploadProgress.percent)}%` }}
+              />
+            </div>
+          </div>
+        )}
+
+        {isSyncError && (
+          <div className="item-sync-status item-sync-error">
+            <div className="item-sync-error-info">
+              <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" strokeWidth="2.2">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="12" y1="8" x2="12" y2="12" />
+                <line x1="12" y1="16" x2="12.01" y2="16" />
+              </svg>
+              <span className="item-sync-error-text">
+                {item._syncError || "Không thể lưu ghi chú lên Google Drive."}
+              </span>
+            </div>
+            <div className="item-sync-error-actions">
+              {onRetrySync && (
+                <button
+                  type="button"
+                  className="btn-retry-sync"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onRetrySync(item.id);
+                  }}
+                >
+                  Thử lại
+                </button>
+              )}
+              {onDiscardSync && (
+                <button
+                  type="button"
+                  className="btn-discard-sync"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDiscardSync(item.id);
+                  }}
+                >
+                  Bỏ qua
+                </button>
+              )}
+            </div>
+          </div>
+        )}
       </div>
 
       {showShareModal && (

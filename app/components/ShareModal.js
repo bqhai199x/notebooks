@@ -13,6 +13,7 @@ export default function ShareModal({
   const [token, setToken] = useState(item.share?.token || "");
   const [copied, setCopied] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [savingAction, setSavingAction] = useState(null);
   const initialCopiedRef = useRef(false);
 
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -31,44 +32,25 @@ export default function ShareModal({
     }
   };
 
-  // If item wasn't previously shared, auto-enable and auto-copy link when modal opens
+  // If item was already shared, auto-copy link when modal opens
   useEffect(() => {
     async function initShare() {
       if (initialCopiedRef.current) return;
       initialCopiedRef.current = true;
 
-      if (!item.share?.enabled || !item.share?.token) {
-        setSaving(true);
-        try {
-          const updated = await onUpdateShare({
-            id: item.id,
-            enabled: true,
-            allowEdit: false,
-          });
-          if (updated?.share?.token) {
-            setEnabled(true);
-            setAllowEdit(Boolean(updated.share.allowEdit));
-            setToken(updated.share.token);
-            const url = `${origin}/share/${item.id}?space=${encodeURIComponent(spaceId || "default")}&token=${encodeURIComponent(updated.share.token)}`;
-            await copyToClipboard(url);
-          }
-        } catch {
-          // Ignore
-        } finally {
-          setSaving(false);
-        }
-      } else {
+      if (item.share?.enabled && item.share?.token) {
         const url = `${origin}/share/${item.id}?space=${encodeURIComponent(spaceId || "default")}&token=${encodeURIComponent(item.share.token)}`;
         await copyToClipboard(url);
       }
     }
 
     void initShare();
-  }, [item.id, item.share, onUpdateShare, origin, spaceId]);
+  }, [item.id, item.share, origin, spaceId]);
 
   const handleToggleEnabled = async () => {
     const nextEnabled = !enabled;
     setSaving(true);
+    setSavingAction("toggle-share");
     try {
       const updated = await onUpdateShare({
         id: item.id,
@@ -85,12 +67,14 @@ export default function ShareModal({
       }
     } finally {
       setSaving(false);
+      setSavingAction(null);
     }
   };
 
   const handleToggleAllowEdit = async () => {
     const nextAllowEdit = !allowEdit;
     setSaving(true);
+    setSavingAction("toggle-edit");
     try {
       const updated = await onUpdateShare({
         id: item.id,
@@ -102,12 +86,14 @@ export default function ShareModal({
       }
     } finally {
       setSaving(false);
+      setSavingAction(null);
     }
   };
 
   const handleRegenerateToken = async () => {
     if (!window.confirm("Tạo link mới sẽ làm vô hiệu hóa tất cả các link đã chia sẻ trước đó. Bạn có chắc chắn?")) return;
     setSaving(true);
+    setSavingAction("regenerate");
     try {
       const updated = await onUpdateShare({
         id: item.id,
@@ -123,6 +109,7 @@ export default function ShareModal({
       }
     } finally {
       setSaving(false);
+      setSavingAction(null);
     }
   };
 
@@ -162,15 +149,22 @@ export default function ShareModal({
                 {enabled ? "Bất kỳ ai có link đều có thể truy cập ghi chú này" : "Đã tắt chia sẻ (link trước đó bị vô hiệu)"}
               </span>
             </div>
-            <label className="toggle-switch">
-              <input
-                type="checkbox"
-                checked={enabled}
-                onChange={handleToggleEnabled}
-                disabled={saving}
-              />
-              <span className="toggle-slider" />
-            </label>
+            <div className="share-toggle-container">
+              {savingAction === "toggle-share" && (
+                <svg className="composer-upload-spinner share-saving-spinner" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
+                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                </svg>
+              )}
+              <label className="toggle-switch">
+                <input
+                  type="checkbox"
+                  checked={enabled}
+                  onChange={handleToggleEnabled}
+                  disabled={saving}
+                />
+                <span className="toggle-slider" />
+              </label>
+            </div>
           </div>
 
           {enabled && (
@@ -183,15 +177,22 @@ export default function ShareModal({
                     {allowEdit ? "Người nhận có thể sửa nội dung ghi chú" : "Người nhận chỉ có quyền đọc (Read-only)"}
                   </span>
                 </div>
-                <label className="toggle-switch">
-                  <input
-                    type="checkbox"
-                    checked={allowEdit}
-                    onChange={handleToggleAllowEdit}
-                    disabled={saving}
-                  />
-                  <span className="toggle-slider" />
-                </label>
+                <div className="share-toggle-container">
+                  {savingAction === "toggle-edit" && (
+                    <svg className="composer-upload-spinner share-saving-spinner" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                    </svg>
+                  )}
+                  <label className="toggle-switch">
+                    <input
+                      type="checkbox"
+                      checked={allowEdit}
+                      onChange={handleToggleAllowEdit}
+                      disabled={saving}
+                    />
+                    <span className="toggle-slider" />
+                  </label>
+                </div>
               </div>
 
               {/* Link Box */}
@@ -239,13 +240,19 @@ export default function ShareModal({
                   onClick={handleRegenerateToken}
                   disabled={saving}
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
-                    <path d="M21 3v5h-5" />
-                    <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
-                    <path d="M8 16H3v5" />
-                  </svg>
-                  <span>Tạo link mới (Hủy link cũ)</span>
+                  {savingAction === "regenerate" ? (
+                    <svg className="composer-upload-spinner" viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" strokeWidth="2.5">
+                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
+                    </svg>
+                  ) : (
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <path d="M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8" />
+                      <path d="M21 3v5h-5" />
+                      <path d="M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16" />
+                      <path d="M8 16H3v5" />
+                    </svg>
+                  )}
+                  <span>{savingAction === "regenerate" ? "Đang tạo..." : "Tạo link mới (Hủy link cũ)"}</span>
                 </button>
               </div>
             </>

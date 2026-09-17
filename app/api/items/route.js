@@ -25,15 +25,7 @@ function authorize(request) {
   return null;
 }
 
-function uploadsPrefix(spaceId) {
-  const basePrefix = (process.env.S3_UPLOAD_PREFIX || "notes/uploads").replace(/^\/+|\/+$/g, "");
-  if (!spaceId || spaceId === "default") return basePrefix;
-
-  const safeSpace = spaceId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 64);
-  return `notes/spaces/${safeSpace}/uploads`;
-}
-
-function normalizeAttachment(value, spaceId) {
+function normalizeAttachment(value) {
   if (!value || typeof value !== "object") return null;
 
   if (value.kind === "link" && typeof value.url === "string") {
@@ -51,7 +43,7 @@ function normalizeAttachment(value, spaceId) {
     }
   }
 
-  if (!['image', 'file'].includes(value.kind) || typeof value.id !== "string" || typeof value.key !== "string") {
+  if (!['image', 'file'].includes(value.kind) || typeof value.id !== "string" || typeof value.key !== "string" || !value.key.trim()) {
     return null;
   }
 
@@ -59,7 +51,7 @@ function normalizeAttachment(value, spaceId) {
     ? value.contentType.slice(0, 160)
     : "application/octet-stream";
   const kind = contentType.startsWith("image/") ? "image" : "file";
-  if (value.kind !== kind || !value.key.startsWith(`${uploadsPrefix(spaceId)}/`)) return null;
+  if (value.kind !== kind) return null;
 
   return {
     id: value.id,
@@ -74,10 +66,10 @@ function normalizeAttachment(value, spaceId) {
   };
 }
 
-function attachments(value, spaceId) {
+function attachments(value) {
   if (!Array.isArray(value)) return [];
   if (value.length > MAX_ATTACHMENTS) throw new Error("Too many attachments.");
-  const normalized = value.map((attachment) => normalizeAttachment(attachment, spaceId)).filter(Boolean);
+  const normalized = value.map((attachment) => normalizeAttachment(attachment)).filter(Boolean);
   if (new Set(normalized.map((attachment) => attachment.id)).size !== normalized.length) {
     throw new Error("Duplicate attachment.");
   }
@@ -124,7 +116,7 @@ function errorResponse(error) {
 const MAX_RETRIES = 3;
 
 async function modifyItemsWithRetry(mutator, spaceId = null) {
-  const { getItemsWithMeta, saveItems } = await import("../../../lib/s3-notes");
+  const { getItemsWithMeta, saveItems } = await import("../../../lib/gdrive-notes");
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { items, eTag } = await getItemsWithMeta(spaceId);
     const result = await mutator(items);
@@ -134,7 +126,9 @@ async function modifyItemsWithRetry(mutator, spaceId = null) {
       return result;
     } catch (error) {
       const isPreconditionFailed = error?.name === "PreconditionFailed"
-        || error?.$metadata?.httpStatusCode === 412;
+        || error?.$metadata?.httpStatusCode === 412
+        || error?.status === 412
+        || error?.code === 412;
       if (isPreconditionFailed && attempt < MAX_RETRIES - 1) {
         await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
         continue;
@@ -150,7 +144,7 @@ export async function GET(request) {
 
   try {
     const spaceId = getAccessSpace(request);
-    const { getItems } = await import("../../../lib/s3-notes");
+    const { getItems } = await import("../../../lib/gdrive-notes");
     return response({ items: await getItems(spaceId), spaceId: spaceId || "default" });
   } catch (error) {
     return errorResponse(error);
@@ -164,7 +158,7 @@ export async function POST(request) {
   try {
     const spaceId = getAccessSpace(request);
     const input = await body(request);
-    const itemAttachments = attachments(input.attachments, spaceId);
+    const itemAttachments = attachments(input.attachments);
     const prepared = itemContent(input, itemAttachments);
     if (!hasItemContent(prepared) && itemAttachments.length === 0) {
       return response({ error: "Item is empty." }, 400);
@@ -207,7 +201,7 @@ export async function PATCH(request) {
       return response({ error: "Invalid request." }, 400);
     }
 
-    const { deleteAttachments } = await import("../../../lib/s3-notes");
+    const { deleteAttachments } = await import("../../../lib/gdrive-notes");
     let removedAttachmentKeys = [];
     let updatedItem = null;
 
@@ -260,7 +254,7 @@ export async function PATCH(request) {
       }
 
       const itemAttachments = Array.isArray(input.attachments)
-        ? attachments(input.attachments, spaceId)
+        ? attachments(input.attachments)
         : items[index].attachments;
       const prepared = itemContent(input, itemAttachments);
       if (!hasItemContent(prepared) && itemAttachments.length === 0) {

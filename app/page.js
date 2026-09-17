@@ -55,40 +55,69 @@ function sameItemOrder(left, right) {
   return left.length === right.length && left.every((item, index) => item.id === right[index]?.id);
 }
 
-async function putFileToS3(url, headers, body) {
+async function putFileToUrl(url, headers, body) {
   let result;
   try {
     result = await fetch(url, { method: "PUT", headers, body });
   } catch {
-    throw new Error("Cannot reach S3. Check the bucket CORS configuration and your network connection.");
+    throw new Error("Cannot reach storage endpoint. Check your network connection.");
   }
   if (result.ok) return result;
   if (result.status === 403) {
-    throw new Error("S3 rejected the upload. Check the bucket CORS and IAM settings.");
+    throw new Error("Storage service rejected the upload. Check your permissions.");
   }
-  throw new Error(`S3 upload failed (${result.status}).`);
+  throw new Error(`Upload failed (${result.status}).`);
 }
 
-async function uploadMultipartToS3(file, upload) {
-  const completedParts = new Array(upload.parts.length);
-  let nextPartIndex = 0;
-  const workerCount = Math.min(3, upload.parts.length);
-
-  async function uploadNextPart() {
-    while (nextPartIndex < upload.parts.length) {
-      const partIndex = nextPartIndex;
-      nextPartIndex += 1;
-      const part = upload.parts[partIndex];
-      const start = partIndex * upload.partSize;
-      const result = await putFileToS3(part.url, part.headers, file.slice(start, start + upload.partSize));
-      const eTag = result.headers.get("ETag");
-      if (!eTag) throw new Error("S3 did not return an ETag. Add ETag to the bucket CORS exposed headers.");
-      completedParts[partIndex] = { partNumber: part.partNumber, eTag };
+function uploadWithXHR(url, method, headers, body, onProgress, signal) {
+  return new Promise((resolve, reject) => {
+    const xhr = new XMLHttpRequest();
+    xhr.open(method, url);
+    if (signal) {
+      if (signal.aborted) {
+        return reject(new Error("Upload đã bị hủy."));
+      }
+      signal.addEventListener("abort", () => {
+        xhr.abort();
+        reject(new Error("Upload đã bị hủy."));
+      });
     }
-  }
-
-  await Promise.all(Array.from({ length: workerCount }, uploadNextPart));
-  return completedParts;
+    if (headers) {
+      for (const [key, value] of Object.entries(headers)) {
+        if (value !== undefined && value !== null) {
+          xhr.setRequestHeader(key, value);
+        }
+      }
+    }
+    if (xhr.upload && onProgress) {
+      xhr.upload.onprogress = (event) => {
+        if (event.lengthComputable && event.total > 0) {
+          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
+          onProgress(percent, event.loaded, event.total);
+        }
+      };
+    }
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          resolve(xhr.responseText);
+        }
+      } else {
+        let errMsg = `Upload failed (${xhr.status})`;
+        try {
+          const errJson = JSON.parse(xhr.responseText);
+          if (errJson.error) errMsg = errJson.error;
+        } catch {}
+        reject(new Error(errMsg));
+      }
+    };
+    xhr.onerror = () => reject(new Error("Network error during upload. Check your connection."));
+    xhr.onabort = () => reject(new Error("Upload đã bị hủy."));
+    xhr.ontimeout = () => reject(new Error("Upload timed out."));
+    xhr.send(body);
+  });
 }
 
 async function createThumbnail(file, maxDim = 120, quality = 0.65) {
@@ -148,7 +177,6 @@ export default function Home() {
   const [locked, setLocked] = useState(true);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [uploading, setUploading] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [notice, setNotice] = useState("");
   const [draft, setDraft] = useState(() => emptyRichText());
@@ -156,6 +184,7 @@ export default function Home() {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [currentSpaceId, setCurrentSpaceId] = useState("default");
   const [editingId, setEditingId] = useState(null);
+  const [deletingId, setDeletingId] = useState(null);
   const [editDraft, setEditDraft] = useState(() => emptyRichText());
   const [editAttachments, setEditAttachments] = useState([]);
   const [attachmentUrls, setAttachmentUrls] = useState({});
@@ -177,6 +206,7 @@ export default function Home() {
   const editAttachmentsRef = useRef([]);
   const draftRef = useRef(draft);
   const editDraftRef = useRef(editDraft);
+  const syncAbortControllers = useRef(new Map());
 
   useEffect(() => {
     const onDragStart = () => {
@@ -207,7 +237,6 @@ export default function Home() {
   const isRefreshingRef = useRef(false);
   const isEditingRef = useRef(false);
   const savingRef = useRef(false);
-  const uploadingRef = useRef(false);
   const reorderingRef = useRef(false);
   const accessKeyRef = useRef("");
   const hasVibratedRef = useRef(false);
@@ -216,7 +245,6 @@ export default function Home() {
   isRefreshingRef.current = isRefreshing;
   isEditingRef.current = Boolean(editingId);
   savingRef.current = saving;
-  uploadingRef.current = uploading;
   accessKeyRef.current = accessKey;
   itemsRef.current = items;
   pendingRef.current = pending;
@@ -254,6 +282,50 @@ export default function Home() {
       });
       return next;
     });
+  }
+
+  const UNSYNCED_CACHE_KEY = "notes-unsynced-cache";
+
+  function getStoredUnsyncedItems() {
+    try {
+      const raw = localStorage.getItem(UNSYNCED_CACHE_KEY);
+      if (!raw) return [];
+      const parsed = JSON.parse(raw);
+      return Array.isArray(parsed) ? parsed : [];
+    } catch {
+      return [];
+    }
+  }
+
+  function persistUnsyncedItem(item) {
+    try {
+      const current = getStoredUnsyncedItems().filter((it) => it.id !== item.id);
+      const serializable = {
+        id: item.id,
+        content: item.content,
+        contentFormat: item.contentFormat,
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+        attachments: (item.attachments || []).filter((a) => !a.file),
+        _rawDraft: item._rawDraft,
+        _syncStatus: "error",
+        _syncError: item._syncError,
+        _previousItem: item._previousItem,
+      };
+      current.unshift(serializable);
+      localStorage.setItem(UNSYNCED_CACHE_KEY, JSON.stringify(current));
+    } catch {}
+  }
+
+  function removeStoredUnsyncedItem(itemId) {
+    try {
+      const remaining = getStoredUnsyncedItems().filter((it) => it.id !== itemId);
+      if (remaining.length > 0) {
+        localStorage.setItem(UNSYNCED_CACHE_KEY, JSON.stringify(remaining));
+      } else {
+        localStorage.removeItem(UNSYNCED_CACHE_KEY);
+      }
+    } catch {}
   }
 
   function attachmentsForTarget(target) {
@@ -384,7 +456,13 @@ export default function Home() {
     setNotice("");
     try {
       const data = await callApi("/api/items", {}, key);
-      const nextItems = orderItems(data.items);
+      const fetchedItems = orderItems(data.items);
+      const unsynced = getStoredUnsyncedItems();
+      const unsyncedIds = new Set(unsynced.map((u) => u.id));
+      const nextItems = [
+        ...unsynced,
+        ...fetchedItems.filter((it) => !unsyncedIds.has(it.id)),
+      ];
       itemsRef.current = nextItems;
       setItems(nextItems);
       if (data.spaceId) {
@@ -401,7 +479,6 @@ export default function Home() {
   async function persistItemOrder(itemId, orderedIds) {
     if (
       savingRef.current
-      || uploadingRef.current
       || isEditingRef.current
       || reorderingRef.current
     ) return;
@@ -446,7 +523,6 @@ export default function Home() {
       || items.length < 2
       || editingId
       || saving
-      || uploading
       || reordering
     ) {
       return undefined;
@@ -486,7 +562,7 @@ export default function Home() {
       disposed = true;
       sortable?.destroy();
     };
-  }, [locked, items.length, editingId, saving, uploading, reordering]);
+  }, [locked, items.length, editingId, saving, reordering]);
 
   useEffect(() => {
     const container = itemsListRef.current;
@@ -498,7 +574,7 @@ export default function Home() {
 
     const handleTouchStart = (e) => {
       if (e.touches.length !== 1) return;
-      if (isRefreshingRef.current || isEditingRef.current || savingRef.current || uploadingRef.current) return;
+      if (isRefreshingRef.current || isEditingRef.current || savingRef.current) return;
       if (e.target instanceof Element && e.target.closest(".item-drag-handle")) return;
 
       if (container.scrollTop <= 0) {
@@ -655,7 +731,17 @@ export default function Home() {
       }
     } catch {}
 
+    const handleBeforeUnload = (e) => {
+      if (itemsRef.current.some((it) => it._syncStatus === "syncing")) {
+        e.preventDefault();
+        e.returnValue = "";
+        return "";
+      }
+    };
+    window.addEventListener("beforeunload", handleBeforeUnload);
+
     return () => {
+      window.removeEventListener("beforeunload", handleBeforeUnload);
       objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
     };
   }, []);
@@ -681,27 +767,35 @@ export default function Home() {
     missing.forEach((att) => loadingAttachments.current.add(att.id));
 
     let cancelled = false;
-    Promise.all(missing.map(async (attachment) => {
+
+    async function fetchWithConcurrency(itemsToFetch, limit, worker) {
+      const executing = new Set();
+      for (const itemToFetch of itemsToFetch) {
+        if (cancelled) break;
+        const p = Promise.resolve().then(() => worker(itemToFetch));
+        executing.add(p);
+        const clean = () => executing.delete(p);
+        p.then(clean, clean);
+        if (executing.size >= limit) {
+          await Promise.race(executing);
+        }
+      }
+      await Promise.all(executing);
+    }
+
+    void fetchWithConcurrency(missing, 4, async (attachment) => {
       try {
         const url = await loadAttachment(attachment);
-        return [attachment.id, url];
+        if (!cancelled && url) {
+          setAttachmentUrls((current) => ({
+            ...current,
+            [attachment.id]: url,
+          }));
+        }
       } catch {
         failedAttachments.current.add(attachment.id);
-        return null;
       } finally {
         loadingAttachments.current.delete(attachment.id);
-      }
-    })).then((loaded) => {
-      if (cancelled) {
-        loaded.filter(Boolean).forEach(([, url]) => revokeUrl(url));
-        return;
-      }
-      const newEntries = loaded.filter(Boolean);
-      if (newEntries.length > 0) {
-        setAttachmentUrls((current) => ({
-          ...current,
-          ...Object.fromEntries(newEntries),
-        }));
       }
     });
 
@@ -717,7 +811,27 @@ export default function Home() {
     await loadItems(key);
   }
 
-  async function uploadAttachment(file) {
+
+  async function uploadAttachment(file, onProgress, signal) {
+    if (signal?.aborted) throw new Error("Upload đã bị hủy.");
+
+    // Với file <= 20 MB: upload trực tiếp qua FormData lên API server (nhanh, ổn định, không bị lỗi CORS trình duyệt)
+    if (file.size <= 20 * 1024 * 1024) {
+      const formData = new FormData();
+      formData.append("file", file);
+
+      const data = await uploadWithXHR(
+        "/api/uploads",
+        "POST",
+        { "x-notes-access-key": accessKey },
+        formData,
+        onProgress,
+        signal
+      );
+      return data.attachment;
+    }
+
+    // Với file lớn (> 20 MB): Sử dụng Google Drive Resumable Upload
     const data = await callApi("/api/uploads", {
       method: "POST",
       body: JSON.stringify({
@@ -729,50 +843,77 @@ export default function Home() {
     });
 
     try {
-      if (data.upload?.mode === "single") {
-        await putFileToS3(data.upload.url, data.upload.headers, file);
-      } else if (data.upload?.mode === "multipart") {
-        const parts = await uploadMultipartToS3(file, data.upload);
+      if (data.upload?.mode === "resumable") {
+        const headers = {
+          "Content-Type": file.type || "application/octet-stream",
+        };
+        if (data.upload.accessToken) {
+          headers["Authorization"] = `Bearer ${data.upload.accessToken}`;
+        }
+        const googleFile = await uploadWithXHR(
+          data.upload.url,
+          "PUT",
+          headers,
+          file,
+          onProgress,
+          signal
+        );
+        if (googleFile?.id) {
+          data.attachment.key = googleFile.id;
+        }
         await callApi("/api/uploads", {
           method: "POST",
-          body: JSON.stringify({
-            action: "complete",
-            key: data.attachment.key,
-            uploadId: data.upload.uploadId,
-            parts,
-          }),
-        });
-      } else {
-        throw new Error("Upload setup returned an invalid response.");
-      }
-      return data.attachment;
-    } catch (error) {
-      if (data.upload?.mode === "multipart") {
-        await callApi("/api/uploads", {
-          method: "POST",
-          body: JSON.stringify({
-            action: "abort",
-            key: data.attachment.key,
-            uploadId: data.upload.uploadId,
-          }),
+          body: JSON.stringify({ action: "complete" }),
         }).catch(() => {});
-      } else if (data.attachment?.key) {
+        return data.attachment;
+      }
+      throw new Error("Upload setup returned an invalid response.");
+    } catch (error) {
+      if (data.attachment?.key) {
         await callApi(`/api/uploads?key=${encodeURIComponent(data.attachment.key)}`, { method: "DELETE" }).catch(() => {});
       }
       throw error;
     }
   }
 
-  async function uploadSelectedFiles(attachments) {
+  async function uploadSelectedFilesForNote(noteId, attachments, signal) {
     const uploaded = [];
     const completed = [];
+    const filesToUpload = attachments.filter((a) => a.file);
+    const totalFiles = filesToUpload.length;
+    let fileIndex = 0;
+
+    const setNoteProgress = (progress) => {
+      setItems((current) => current.map((it) => (it.id === noteId ? {
+        ...it,
+        _uploadProgress: progress,
+      } : it)));
+    };
+
     try {
       for (const attachment of attachments) {
+        if (signal?.aborted) throw new Error("Upload đã bị hủy.");
         if (!attachment.file) {
           completed.push({ sourceId: attachment.id, attachment });
           continue;
         }
-        const storedAttachment = await uploadAttachment(attachment.file);
+        fileIndex += 1;
+        setNoteProgress({
+          percent: 0,
+          current: fileIndex,
+          total: totalFiles,
+          name: attachment.file.name,
+        });
+
+        const storedAttachment = await uploadAttachment(attachment.file, (percent) => {
+          setNoteProgress({
+            percent,
+            current: fileIndex,
+            total: totalFiles,
+            name: attachment.file.name,
+          });
+        }, signal);
+
         uploaded.push(storedAttachment);
         let thumbnail = attachment.thumbnail;
         if (!thumbnail && attachment.file?.type?.startsWith("image/")) {
@@ -793,6 +934,8 @@ export default function Home() {
         callApi(`/api/uploads?key=${encodeURIComponent(attachment.key)}`, { method: "DELETE" })
       )));
       throw error;
+    } finally {
+      setNoteProgress(null);
     }
   }
 
@@ -802,25 +945,27 @@ export default function Home() {
     )));
   }
 
-  async function addItem() {
-    if (saving || uploading) return;
-    const activeAttachments = attachmentsUsedByContent(pendingRef.current, draft);
-    if (!richTextHasText(draft) && activeAttachments.length === 0) return;
-
-    setSaving(true);
-    setUploading(activeAttachments.some((attachment) => attachment.file));
-    setNotice("");
+  async function runSyncNewItem(optimisticId, noteDraft, notePending) {
+    const abortController = new AbortController();
+    syncAbortControllers.current.set(optimisticId, abortController);
     let uploaded = [];
+
     try {
-      const uploadResult = await uploadSelectedFiles(activeAttachments);
+      const uploadResult = await uploadSelectedFilesForNote(
+        optimisticId,
+        notePending,
+        abortController.signal
+      );
       uploaded = uploadResult.uploaded;
+
       const attachmentIds = new Map(uploadResult.completed.map(({ sourceId, attachment }) => [sourceId, attachment.id]));
-      const savedContent = replaceInlineImageAttachmentIds(draft, attachmentIds);
+      const savedContent = replaceInlineImageAttachmentIds(noteDraft, attachmentIds);
       const savedImageIds = inlineImageAttachmentIds(savedContent);
       const savedAttachments = uploadResult.completed
         .map(({ attachment }) => attachment)
         .filter((attachment) => !attachment._inline || savedImageIds.has(attachment.id))
         .map(persistedAttachment);
+
       const data = await callApi("/api/items", {
         method: "POST",
         body: JSON.stringify({
@@ -829,22 +974,100 @@ export default function Home() {
           attachments: savedAttachments,
         }),
       });
-      upsertItem(data.item);
-      removeAttachmentUrls([
-        ...activeAttachments,
-        ...discardedAttachmentsForTarget("new").values(),
-      ].filter((attachment) => attachment.file));
-      setDraft(emptyRichText());
-      setAttachmentsForTarget("new", []);
-      discardedAttachmentsForTarget("new").clear();
-      setComposerExpanded(false);
+
+      setItems((current) => current.map((item) => (item.id === optimisticId ? {
+        ...data.item,
+        _syncStatus: "synced",
+        _uploadProgress: null,
+      } : item)));
+      itemsRef.current = itemsRef.current.map((item) => (item.id === optimisticId ? data.item : item));
+      removeStoredUnsyncedItem(optimisticId);
+
+      removeAttachmentUrls(notePending.filter((att) => att.file));
     } catch (error) {
       await deleteUploadedAttachments(uploaded);
-      setNotice(error.message);
+
+      if (abortController.signal.aborted) {
+        removeStoredUnsyncedItem(optimisticId);
+        setItems((current) => current.filter((item) => item.id !== optimisticId));
+        itemsRef.current = itemsRef.current.filter((item) => item.id !== optimisticId);
+        removeAttachmentUrls(notePending.filter((att) => att.file));
+        setNotice("Đã hủy tải lên ghi chú.");
+      } else {
+        const errorItem = {
+          id: optimisticId,
+          content: serializeQuillDelta(noteDraft),
+          contentFormat: QUILL_DELTA_FORMAT,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          _rawDraft: noteDraft,
+          _rawPending: notePending,
+          _syncStatus: "error",
+          _syncError: error.message || "Lỗi lưu ghi chú lên Google Drive.",
+          _uploadProgress: null,
+        };
+        persistUnsyncedItem(errorItem);
+        setItems((current) => current.map((item) => (item.id === optimisticId ? {
+          ...item,
+          ...errorItem,
+        } : item)));
+      }
     } finally {
-      setSaving(false);
-      setUploading(false);
+      syncAbortControllers.current.delete(optimisticId);
     }
+  }
+
+  async function addItem() {
+    const activeAttachments = attachmentsUsedByContent(pendingRef.current, draft);
+    if (!richTextHasText(draft) && activeAttachments.length === 0) return;
+
+    const optimisticId = makeId();
+    const now = new Date().toISOString();
+
+    const currentDraft = draft;
+    const currentPending = [...activeAttachments];
+
+    const optimisticItem = {
+      id: optimisticId,
+      content: serializeQuillDelta(currentDraft),
+      contentFormat: QUILL_DELTA_FORMAT,
+      attachments: currentPending.map((att) => ({
+        id: att.id,
+        kind: att.kind,
+        key: att.key || "",
+        name: att.name,
+        contentType: att.contentType,
+        size: att.size,
+        thumbnail: att.thumbnail,
+        _inline: att._inline,
+        _previewUrl: att._previewUrl,
+      })),
+      createdAt: now,
+      updatedAt: now,
+      _syncStatus: "syncing",
+      _uploadProgress: currentPending.some((a) => a.file) ? {
+        percent: 0,
+        current: 1,
+        total: currentPending.filter((a) => a.file).length,
+        name: currentPending.find((a) => a.file)?.name || "tệp tin",
+      } : null,
+      _rawPending: currentPending,
+      _rawDraft: currentDraft,
+    };
+
+    // Render ngay lập tức lên giao diện với độ trễ 0ms!
+    setItems((current) => [optimisticItem, ...current]);
+    itemsRef.current = [optimisticItem, ...itemsRef.current];
+
+    // Reset composer ngay lập tức
+    setDraft(emptyRichText());
+    setAttachmentsForTarget("new", []);
+    discardedAttachmentsForTarget("new").clear();
+    setComposerExpanded(false);
+    setNotice("");
+
+    // Tiến hành đồng bộ ngầm
+    void runSyncNewItem(optimisticId, currentDraft, currentPending);
   }
 
   function startEdit(item) {
@@ -887,56 +1110,189 @@ export default function Home() {
     removeAttachmentUrls([attachment]);
   }
 
+  async function runSyncEditItem(editId, noteDraft, noteAttachments, previousItem) {
+    const abortController = new AbortController();
+    syncAbortControllers.current.set(editId, abortController);
+    let uploaded = [];
+
+    try {
+      const uploadResult = await uploadSelectedFilesForNote(
+        editId,
+        noteAttachments,
+        abortController.signal
+      );
+      uploaded = uploadResult.uploaded;
+
+      const attachmentIds = new Map(uploadResult.completed.map(({ sourceId, attachment }) => [sourceId, attachment.id]));
+      const savedContent = replaceInlineImageAttachmentIds(noteDraft, attachmentIds);
+      const savedImageIds = inlineImageAttachmentIds(savedContent);
+      const savedAttachments = uploadResult.completed
+        .map(({ attachment }) => attachment)
+        .filter((attachment) => !attachment._inline || savedImageIds.has(attachment.id))
+        .map(persistedAttachment);
+
+      const data = await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "edit-item",
+          id: editId,
+          content: serializeQuillDelta(savedContent),
+          contentFormat: QUILL_DELTA_FORMAT,
+          attachments: savedAttachments,
+        }),
+      });
+
+      setItems((current) => current.map((item) => (item.id === editId ? {
+        ...data.item,
+        _syncStatus: "synced",
+        _uploadProgress: null,
+      } : item)));
+      itemsRef.current = itemsRef.current.map((item) => (item.id === editId ? data.item : item));
+      removeStoredUnsyncedItem(editId);
+
+      const removedAttachments = (previousItem.attachments || []).filter((attachment) => (
+        attachment.key && !savedAttachments.some((next) => next.key === attachment.key)
+      ));
+      removeAttachmentUrls(removedAttachments);
+      removeAttachmentUrls(noteAttachments.filter((att) => att.file));
+    } catch (error) {
+      await deleteUploadedAttachments(uploaded);
+
+      if (abortController.signal.aborted) {
+        removeStoredUnsyncedItem(editId);
+        setItems((current) => current.map((item) => (item.id === editId ? previousItem : item)));
+        itemsRef.current = itemsRef.current.map((item) => (item.id === editId ? previousItem : item));
+        setNotice("Đã hủy chỉnh sửa ghi chú.");
+      } else {
+        const errorItem = {
+          id: editId,
+          content: serializeQuillDelta(noteDraft),
+          contentFormat: QUILL_DELTA_FORMAT,
+          createdAt: previousItem.createdAt,
+          updatedAt: new Date().toISOString(),
+          _rawDraft: noteDraft,
+          _rawPending: noteAttachments,
+          _previousItem: previousItem,
+          _syncStatus: "error",
+          _syncError: error.message || "Không thể lưu thay đổi lên Google Drive.",
+          _uploadProgress: null,
+        };
+        persistUnsyncedItem(errorItem);
+        setItems((current) => current.map((item) => (item.id === editId ? {
+          ...item,
+          ...errorItem,
+        } : item)));
+      }
+    } finally {
+      syncAbortControllers.current.delete(editId);
+    }
+  }
+
   async function saveEdit() {
-    if (!editingItem || saving) return;
+    if (!editingItem) return;
     const activeAttachments = attachmentsUsedByContent(editAttachmentsRef.current, editDraft);
     if (!richTextHasText(editDraft) && activeAttachments.length === 0) {
       setNotice("Item is empty.");
       return;
     }
 
-    setSaving(true);
-    setUploading(activeAttachments.some((attachment) => attachment.file));
-    setNotice("");
-    let uploaded = [];
-    try {
-      const uploadResult = await uploadSelectedFiles(activeAttachments);
-      uploaded = uploadResult.uploaded;
-      const attachmentIds = new Map(uploadResult.completed.map(({ sourceId, attachment }) => [sourceId, attachment.id]));
-      const savedContent = replaceInlineImageAttachmentIds(editDraft, attachmentIds);
-      const savedImageIds = inlineImageAttachmentIds(savedContent);
-      const savedAttachments = uploadResult.completed
-        .map(({ attachment }) => attachment)
-        .filter((attachment) => !attachment._inline || savedImageIds.has(attachment.id))
-        .map(persistedAttachment);
-      const data = await callApi("/api/items", {
-        method: "PATCH",
-        body: JSON.stringify({
-          action: "edit-item",
-          id: editingItem.id,
-          content: serializeQuillDelta(savedContent),
+    const editId = editingItem.id;
+    const previousItem = { ...editingItem };
+    const currentDraft = editDraft;
+    const currentAttachments = [...activeAttachments];
+
+    // Cập nhật lạc quan ngay lập tức (0ms)
+    setItems((current) => current.map((item) => {
+      if (item.id === editId) {
+        return {
+          ...item,
+          content: serializeQuillDelta(currentDraft),
           contentFormat: QUILL_DELTA_FORMAT,
-          attachments: savedAttachments,
-        }),
-      });
-      const removedAttachments = editingItem.attachments.filter((attachment) => (
-        attachment.key && !savedAttachments.some((next) => next.key === attachment.key)
-      ));
-      removeAttachmentUrls(removedAttachments);
-      removeAttachmentUrls(activeAttachments.filter((attachment) => attachment.file));
-      upsertItem(data.item);
-      finishEdit();
-    } catch (error) {
-      await deleteUploadedAttachments(uploaded);
-      setNotice(error.message);
-    } finally {
-      setSaving(false);
-      setUploading(false);
+          attachments: currentAttachments.map((att) => ({
+            id: att.id,
+            kind: att.kind,
+            key: att.key || "",
+            name: att.name,
+            contentType: att.contentType,
+            size: att.size,
+            thumbnail: att.thumbnail,
+            _inline: att._inline,
+            _previewUrl: att._previewUrl,
+          })),
+          updatedAt: new Date().toISOString(),
+          _syncStatus: "syncing",
+          _uploadProgress: currentAttachments.some((a) => a.file) ? {
+            percent: 0,
+            current: 1,
+            total: currentAttachments.filter((a) => a.file).length,
+            name: currentAttachments.find((a) => a.file)?.name || "tệp tin",
+          } : null,
+          _rawPending: currentAttachments,
+          _rawDraft: currentDraft,
+          _previousItem: previousItem,
+        };
+      }
+      return item;
+    }));
+
+    finishEdit();
+
+    void runSyncEditItem(editId, currentDraft, currentAttachments, previousItem);
+  }
+
+  function cancelNoteSync(itemId) {
+    const controller = syncAbortControllers.current.get(itemId);
+    if (controller) {
+      controller.abort();
+      syncAbortControllers.current.delete(itemId);
+    }
+  }
+
+  function retryNoteSync(itemId) {
+    const targetItem = itemsRef.current.find((it) => it.id === itemId);
+    if (!targetItem) return;
+
+    setItems((current) => current.map((it) => (it.id === itemId ? {
+      ...it,
+      _syncStatus: "syncing",
+      _syncError: null,
+      _uploadProgress: targetItem._rawPending?.some((a) => a.file) ? {
+        percent: 0,
+        current: 1,
+        total: targetItem._rawPending.filter((a) => a.file).length,
+        name: targetItem._rawPending.find((a) => a.file)?.name || "tệp tin",
+      } : null,
+    } : it)));
+
+    if (targetItem._previousItem) {
+      void runSyncEditItem(itemId, targetItem._rawDraft, targetItem._rawPending, targetItem._previousItem);
+    } else {
+      void runSyncNewItem(itemId, targetItem._rawDraft, targetItem._rawPending);
+    }
+  }
+
+  function discardNoteSync(itemId) {
+    cancelNoteSync(itemId);
+    removeStoredUnsyncedItem(itemId);
+    const targetItem = itemsRef.current.find((it) => it.id === itemId);
+    if (!targetItem) return;
+
+    if (targetItem._rawPending) {
+      removeAttachmentUrls(targetItem._rawPending.filter((att) => att.file));
+    }
+
+    if (targetItem._previousItem) {
+      setItems((current) => current.map((it) => (it.id === itemId ? targetItem._previousItem : it)));
+      itemsRef.current = itemsRef.current.map((it) => (it.id === itemId ? targetItem._previousItem : it));
+    } else {
+      setItems((current) => current.filter((it) => it.id !== itemId));
+      itemsRef.current = itemsRef.current.filter((it) => it.id !== itemId);
     }
   }
 
   async function deleteItem(item) {
     if (!window.confirm("Delete this item and its attachments?")) return;
+    setDeletingId(item.id);
     setSaving(true);
     setNotice("");
     try {
@@ -962,6 +1318,7 @@ export default function Home() {
     } catch (error) {
       setNotice(error.message);
     } finally {
+      setDeletingId(null);
       setSaving(false);
     }
   }
@@ -1110,6 +1467,8 @@ export default function Home() {
   }
 
   function lock() {
+    syncAbortControllers.current.forEach((controller) => controller.abort());
+    syncAbortControllers.current.clear();
     localStorage.removeItem(ACCESS_KEY_STORAGE);
     clearAttachmentUrls();
     setAccessKey("");
@@ -1222,9 +1581,9 @@ export default function Home() {
               item={item}
               index={index}
               isEditing={editingId === item.id}
+              isDeleting={deletingId === item.id}
               reordering={reordering}
               saving={saving}
-              uploading={uploading}
               onStartEdit={startEdit}
               onDelete={deleteItem}
               attachmentUrls={attachmentUrls}
@@ -1232,6 +1591,9 @@ export default function Home() {
               onDownloadAttachment={downloadAttachment}
               spaceId={currentSpaceId}
               onUpdateShare={updateItemShare}
+              onCancelSync={cancelNoteSync}
+              onRetrySync={retryNoteSync}
+              onDiscardSync={discardNoteSync}
             />
           ))}
         </div>
@@ -1256,7 +1618,6 @@ export default function Home() {
           onSelectInlineImages={(files) => addInlineImages(files, editingItem ? "edit" : "new")}
           attachmentUrls={attachmentUrls}
           saving={saving}
-          uploading={uploading}
           onSelectFiles={(files) => handleAddFiles(files, editingItem ? "edit" : "new")}
           notice={notice}
           editingItem={editingItem}

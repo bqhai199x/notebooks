@@ -29,7 +29,7 @@ export async function GET(request) {
       return response({ error: "Thiếu thông tin yêu cầu tệp." }, 400);
     }
 
-    const { getItems, getAttachment, getAttachmentDownloadUrl } = await import("../../../../lib/s3-notes");
+    const { getItems, getAttachment, getAttachmentDownloadUrl } = await import("../../../../lib/gdrive-notes");
     let items = await getItems(spaceId);
     let item = items.find((entry) => entry.id === id);
 
@@ -63,18 +63,22 @@ export async function GET(request) {
       return response({ url });
     }
 
-    const file = await getAttachment({ key, spaceId });
-
     const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch && file.eTag && (ifNoneMatch === file.eTag || ifNoneMatch === `"${file.eTag}"` || ifNoneMatch === file.eTag.replace(/^"|"$/g, ""))) {
-      return new NextResponse(null, {
-        status: 304,
-        headers: {
-          "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
-          "ETag": file.eTag,
-        },
-      });
+    if (ifNoneMatch) {
+      const { getAttachmentMeta } = await import("../../../../lib/gdrive-notes");
+      const meta = await getAttachmentMeta({ key, spaceId });
+      if (meta.eTag && (ifNoneMatch === meta.eTag || ifNoneMatch === `"${meta.eTag}"` || ifNoneMatch === meta.eTag.replace(/^"|"$/g, ""))) {
+        return new NextResponse(null, {
+          status: 304,
+          headers: {
+            "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+            "ETag": meta.eTag,
+          },
+        });
+      }
     }
+
+    const file = await getAttachment({ key, spaceId });
 
     const stream = typeof file.body.transformToWebStream === "function"
       ? file.body.transformToWebStream()
