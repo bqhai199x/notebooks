@@ -53,7 +53,7 @@ export default function AttachmentList({
           const downloading = downloadingAttachments[attachment.id];
           return (
             <button
-              className="attachment-file-card"
+              className={`attachment-file-card${downloading ? " is-downloading" : ""}`}
               type="button"
               key={attachment.id}
               onClick={() => onDownload?.(attachment)}

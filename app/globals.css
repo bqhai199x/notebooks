@@ -22,6 +22,7 @@
 
   --accent-primary: #4f46e5;
   --accent-primary-hover: #4338ca;
+  --accent-hover: #4338ca;
   --accent-primary-subtle: #eef2ff;
   --accent-primary-text: #4338ca;
 
@@ -593,13 +594,16 @@ h1, h2, h3, p, ol, ul {
   justify-content: center;
   width: 24px;
   height: 24px;
-  color: var(--accent-primary);
+  color: var(--accent-primary) !important;
+  background: transparent !important;
+  border: none !important;
   flex-shrink: 0;
 }
 
 .item-sync-spinner-icon svg {
-  width: 14px;
-  height: 14px;
+  width: 13px;
+  height: 13px;
+  stroke: var(--accent-primary) !important;
 }
 
 .item-action-btn {
@@ -662,6 +666,18 @@ h1, h2, h3, p, ol, ul {
 .item-action-btn.btn-delete:hover:not(:disabled) {
   color: var(--danger);
   background: var(--danger-subtle);
+}
+
+.item-action-btn.btn-delete.is-deleting {
+  color: var(--danger) !important;
+  background: transparent !important;
+  border: none !important;
+  opacity: 1 !important;
+  cursor: wait;
+}
+
+.item-action-btn.btn-delete.is-deleting svg {
+  stroke: var(--danger) !important;
 }
 
 /* Item Body Content */
@@ -1222,6 +1238,14 @@ h1, h2, h3, p, ol, ul {
   box-shadow: var(--shadow-xs);
 }
 
+.attachment-file-card.is-downloading {
+  cursor: wait;
+}
+
+.attachment-file-card.is-downloading .attachment-download-icon {
+  color: var(--accent-primary);
+}
+
 .attachment-icon-pill {
   display: flex;
   align-items: center;
@@ -1460,15 +1484,15 @@ h1, h2, h3, p, ol, ul {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  padding: 1px 7px;
-  font-size: 0.72rem;
-  font-weight: 600;
+  width: 20px;
+  height: 20px;
+  padding: 0;
   color: var(--danger-text);
   background: var(--danger-subtle);
   border: 1px solid rgba(239, 68, 68, 0.35);
   border-radius: var(--radius-sm);
   cursor: pointer;
-  line-height: 1.4;
+  flex-shrink: 0;
   transition: all var(--duration-fast);
 }
 
@@ -1476,6 +1500,11 @@ h1, h2, h3, p, ol, ul {
   background: #fee2e2;
   border-color: var(--danger);
   color: var(--danger-hover);
+}
+
+.btn-cancel-upload svg {
+  width: 12px;
+  height: 12px;
 }
 
 .composer-upload-progress-track {
@@ -1894,12 +1923,13 @@ h1, h2, h3, p, ol, ul {
 /* Spinner */
 .spinner-icon {
   display: inline-block;
-  width: 16px;
-  height: 16px;
-  border: 2px solid currentColor;
-  border-right-color: transparent;
+  width: 15px;
+  height: 15px;
+  border: 2px solid rgba(79, 70, 229, 0.2);
+  border-top-color: var(--accent-primary);
   border-radius: 50%;
-  animation: ptrSpin 0.7s linear infinite;
+  animation: spin 0.7s linear infinite;
+  box-sizing: border-box;
 }
 
 @keyframes spin {
@@ -2008,6 +2038,11 @@ h1, h2, h3, p, ol, ul {
 
   .item-header-actions {
     gap: 4px;
+  }
+
+  .item-sync-spinner-icon {
+    width: 28px;
+    height: 28px;
   }
 
   .item-action-btn {
@@ -2390,29 +2425,65 @@ h1, h2, h3, p, ol, ul {
   cursor: pointer;
   inset: 0;
   background-color: #cbd5e1;
-  transition: 0.2s;
+  transition: background-color 0.2s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 22px;
 }
 
 .toggle-slider:before {
+  display: none !important;
+}
+
+.toggle-thumb {
   position: absolute;
-  content: "";
-  height: 16px;
-  width: 16px;
+  top: 3px;
   left: 3px;
-  bottom: 3px;
-  background-color: white;
-  transition: 0.2s;
+  width: 16px;
+  height: 16px;
+  background-color: #ffffff;
   border-radius: 50%;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+  transition: transform 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .toggle-switch input:checked + .toggle-slider {
   background-color: var(--accent-primary);
 }
 
-.toggle-switch input:checked + .toggle-slider:before {
+.toggle-switch input:checked + .toggle-slider .toggle-thumb {
   transform: translateX(16px);
+}
+
+/* Toggle Loading State (Unified Highlight Style) */
+.toggle-switch.is-loading {
+  cursor: wait !important;
+}
+
+.toggle-switch.is-loading .toggle-slider {
+  cursor: wait !important;
+  opacity: 0.9;
+}
+
+.toggle-switch.is-loading input {
+  cursor: wait !important;
+}
+
+.toggle-switch.is-loading .toggle-thumb {
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+}
+
+/* Toggle Spinner Icon (Unified Highlight: var(--accent-primary) in both ON & OFF states) */
+.toggle-spinner-icon {
+  width: 10px;
+  height: 10px;
+  border: 1.8px solid rgba(79, 70, 229, 0.2);
+  border-top-color: var(--accent-primary);
+  border-radius: 50%;
+  animation: spin 0.65s linear infinite;
+  display: block;
+  flex-shrink: 0;
 }
 
 /* Link Box */
@@ -2465,12 +2536,19 @@ h1, h2, h3, p, ol, ul {
   transition: all var(--duration-fast);
 }
 
-.share-copy-btn:hover {
-  background: var(--accent-hover);
+.share-copy-btn:hover:not(:disabled) {
+  background: var(--accent-primary-hover);
+  color: #ffffff;
 }
 
 .share-copy-btn.copied {
   background: var(--success);
+  color: #ffffff;
+}
+
+.share-copy-btn.copied:hover:not(:disabled) {
+  background: #059669;
+  color: #ffffff;
 }
 
 .share-copy-btn svg {
@@ -2508,6 +2586,12 @@ h1, h2, h3, p, ol, ul {
 .share-regenerate-btn:hover {
   color: var(--danger);
   background: var(--danger-subtle);
+}
+
+.share-regenerate-btn.is-loading {
+  color: var(--accent-primary) !important;
+  background: transparent !important;
+  cursor: wait !important;
 }
 
 .share-regenerate-btn svg {
@@ -2779,7 +2863,7 @@ h1, h2, h3, p, ol, ul {
 }
 
 .shared-btn-save:hover:not(:disabled) {
-  background: var(--accent-hover);
+  background: var(--accent-primary-hover);
 }
 
 .shared-loading {

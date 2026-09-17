@@ -29,7 +29,7 @@ export async function GET(request) {
       return response({ error: "Thiếu thông tin yêu cầu tệp." }, 400);
     }
 
-    const { getItems, getAttachment, getAttachmentDownloadUrl } = await import("../../../../lib/gdrive-notes");
+    const { getItems, getAttachment, contentDisposition } = await import("../../../../lib/gdrive-notes");
     let items = await getItems(spaceId);
     let item = items.find((entry) => entry.id === id);
 
@@ -58,13 +58,8 @@ export async function GET(request) {
       return response({ error: "Tệp không thuộc ghi chú này." }, 403);
     }
 
-    if (isDownload) {
-      const url = await getAttachmentDownloadUrl({ key, spaceId });
-      return response({ url });
-    }
-
     const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch) {
+    if (ifNoneMatch && !isDownload) {
       const { getAttachmentMeta } = await import("../../../../lib/gdrive-notes");
       const meta = await getAttachmentMeta({ key, spaceId });
       if (meta.eTag && (ifNoneMatch === meta.eTag || ifNoneMatch === `"${meta.eTag}"` || ifNoneMatch === meta.eTag.replace(/^"|"$/g, ""))) {
@@ -84,13 +79,18 @@ export async function GET(request) {
       ? file.body.transformToWebStream()
       : Readable.toWeb(file.body);
 
+    const disposition = isDownload
+      ? (typeof contentDisposition === "function" ? contentDisposition(file.safeName, false) : `attachment; filename*=UTF-8''${encodeURIComponent(file.safeName || "download")}`)
+      : (file.contentDisposition || "attachment");
+
     return new NextResponse(stream, {
       headers: {
-        "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+        "Cache-Control": isDownload ? "no-cache" : "private, max-age=86400, stale-while-revalidate=604800",
         "Content-Type": file.contentType,
-        "Content-Disposition": file.contentDisposition || "attachment",
+        "Content-Disposition": disposition,
         "X-Content-Type-Options": "nosniff",
         ...(file.eTag ? { ETag: file.eTag } : {}),
+        ...(file.contentLength ? { "Content-Length": String(file.contentLength) } : {}),
       },
     });
   } catch (error) {

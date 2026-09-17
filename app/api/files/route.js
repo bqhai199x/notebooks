@@ -28,14 +28,10 @@ export async function GET(request) {
     const key = search.get("key");
     if (!key) return response({ error: "File not found." }, 400);
 
-    if (search.get("download") === "1") {
-      const { getAttachmentDownloadUrl } = await import("../../../lib/gdrive-notes");
-      const url = await getAttachmentDownloadUrl({ key, spaceId });
-      return response({ url });
-    }
+    const isDownload = search.get("download") === "1";
 
     const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch) {
+    if (ifNoneMatch && !isDownload) {
       const { getAttachmentMeta } = await import("../../../lib/gdrive-notes");
       const meta = await getAttachmentMeta({ key, spaceId });
       if (meta.eTag && (ifNoneMatch === meta.eTag || ifNoneMatch === `"${meta.eTag}"` || ifNoneMatch === meta.eTag.replace(/^"|"$/g, ""))) {
@@ -49,18 +45,22 @@ export async function GET(request) {
       }
     }
 
-    const { getAttachment } = await import("../../../lib/gdrive-notes");
+    const { getAttachment, contentDisposition } = await import("../../../lib/gdrive-notes");
     const file = await getAttachment({ key, spaceId });
 
     const stream = typeof file.body.transformToWebStream === "function"
       ? file.body.transformToWebStream()
       : Readable.toWeb(file.body);
 
+    const disposition = isDownload
+      ? (typeof contentDisposition === "function" ? contentDisposition(file.safeName, false) : `attachment; filename*=UTF-8''${encodeURIComponent(file.safeName || "download")}`)
+      : (file.contentDisposition || "attachment");
+
     return new NextResponse(stream, {
       headers: {
-        "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
+        "Cache-Control": isDownload ? "no-cache" : "private, max-age=86400, stale-while-revalidate=604800",
         "Content-Type": file.contentType,
-        "Content-Disposition": file.contentDisposition || "attachment",
+        "Content-Disposition": disposition,
         "X-Content-Type-Options": "nosniff",
         ...(file.eTag ? { "ETag": file.eTag } : {}),
         ...(file.contentLength ? { "Content-Length": String(file.contentLength) } : {}),

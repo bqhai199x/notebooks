@@ -38,6 +38,7 @@ export default function SharePage({ params, searchParams }) {
   const [editDraft, setEditDraft] = useState(() => emptyRichText());
   const [editAttachments, setEditAttachments] = useState([]);
   const [saving, setSaving] = useState(false);
+  const [downloadingAttachments, setDownloadingAttachments] = useState({});
 
   useEffect(() => {
     async function loadSharedNote() {
@@ -137,17 +138,30 @@ export default function SharePage({ params, searchParams }) {
   };
 
   const handleDownloadAttachment = async (attachment) => {
-    if (!attachment?.key) return;
+    if (!attachment?.key || downloadingAttachments[attachment.id]) return;
+    setDownloadingAttachments((prev) => ({ ...prev, [attachment.id]: true }));
     const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1`;
     try {
       const res = await fetch(downloadUrl);
-      const data = await res.json();
-      if (data?.url) {
-        window.open(data.url, "_blank");
-      }
+      if (!res.ok) throw new Error("Download failed");
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = attachment.name || "download";
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
     } catch {
       // Fallback direct download
-      window.open(downloadUrl, "_blank");
+      window.location.href = downloadUrl;
+    } finally {
+      setDownloadingAttachments((prev) => {
+        const next = { ...prev };
+        delete next[attachment.id];
+        return next;
+      });
     }
   };
 
@@ -354,6 +368,7 @@ export default function SharePage({ params, searchParams }) {
                 <AttachmentList
                   attachments={displayedAttachments}
                   attachmentUrls={attachmentUrls}
+                  downloadingAttachments={downloadingAttachments}
                   onDownload={handleDownloadAttachment}
                 />
               )}

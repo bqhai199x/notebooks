@@ -693,17 +693,20 @@ export default function Home() {
       const response = await fetch(`/api/files?${query.toString()}`, {
         headers: { "x-notes-access-key": accessKey },
       });
-      const payload = await response.json().catch(() => ({}));
-      if (!response.ok || typeof payload.url !== "string") {
-        throw new Error(payload.error || "Could not prepare attachment download.");
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}));
+        throw new Error(payload.error || "Could not download attachment.");
       }
+      const blob = await response.blob();
+      const blobUrl = URL.createObjectURL(blob);
       const link = document.createElement("a");
-      link.href = payload.url;
+      link.href = blobUrl;
       link.download = attachment.name || "download";
       link.rel = "noreferrer";
       document.body.append(link);
       link.click();
       link.remove();
+      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
     } catch (error) {
       setNotice(error.message || "Could not download attachment.");
     } finally {

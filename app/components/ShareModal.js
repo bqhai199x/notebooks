@@ -48,7 +48,9 @@ export default function ShareModal({
   }, [item.id, item.share, origin, spaceId]);
 
   const handleToggleEnabled = async () => {
+    const prevEnabled = enabled;
     const nextEnabled = !enabled;
+    setEnabled(nextEnabled);
     setSaving(true);
     setSavingAction("toggle-share");
     try {
@@ -64,7 +66,11 @@ export default function ShareModal({
           const url = `${origin}/share/${item.id}?space=${encodeURIComponent(spaceId || "default")}&token=${encodeURIComponent(updated.share.token)}`;
           await copyToClipboard(url);
         }
+      } else {
+        setEnabled(prevEnabled);
       }
+    } catch {
+      setEnabled(prevEnabled);
     } finally {
       setSaving(false);
       setSavingAction(null);
@@ -72,7 +78,9 @@ export default function ShareModal({
   };
 
   const handleToggleAllowEdit = async () => {
+    const prevAllowEdit = allowEdit;
     const nextAllowEdit = !allowEdit;
+    setAllowEdit(nextAllowEdit);
     setSaving(true);
     setSavingAction("toggle-edit");
     try {
@@ -83,7 +91,11 @@ export default function ShareModal({
       });
       if (updated?.share) {
         setAllowEdit(Boolean(updated.share.allowEdit));
+      } else {
+        setAllowEdit(prevAllowEdit);
       }
+    } catch {
+      setAllowEdit(prevAllowEdit);
     } finally {
       setSaving(false);
       setSavingAction(null);
@@ -150,24 +162,23 @@ export default function ShareModal({
               </span>
             </div>
             <div className="share-toggle-container">
-              {savingAction === "toggle-share" && (
-                <svg className="composer-upload-spinner share-saving-spinner" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
-                  <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-                </svg>
-              )}
-              <label className="toggle-switch">
+              <label className={`toggle-switch${savingAction === "toggle-share" ? " is-loading" : ""}`}>
                 <input
                   type="checkbox"
                   checked={enabled}
                   onChange={handleToggleEnabled}
                   disabled={saving}
                 />
-                <span className="toggle-slider" />
+                <span className="toggle-slider">
+                  <span className="toggle-thumb">
+                    {savingAction === "toggle-share" && <span className="toggle-spinner-icon" />}
+                  </span>
+                </span>
               </label>
             </div>
           </div>
 
-          {enabled && (
+          {(enabled || savingAction === "toggle-share") && (
             <>
               {/* Option: Allow editing */}
               <div className="share-option-row">
@@ -178,19 +189,18 @@ export default function ShareModal({
                   </span>
                 </div>
                 <div className="share-toggle-container">
-                  {savingAction === "toggle-edit" && (
-                    <svg className="composer-upload-spinner share-saving-spinner" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" strokeWidth="2.5">
-                      <circle cx="12" cy="12" r="10" strokeDasharray="32" strokeDashoffset="12" />
-                    </svg>
-                  )}
-                  <label className="toggle-switch">
+                  <label className={`toggle-switch${savingAction === "toggle-edit" ? " is-loading" : ""}`}>
                     <input
                       type="checkbox"
                       checked={allowEdit}
                       onChange={handleToggleAllowEdit}
                       disabled={saving}
                     />
-                    <span className="toggle-slider" />
+                    <span className="toggle-slider">
+                      <span className="toggle-thumb">
+                        {savingAction === "toggle-edit" && <span className="toggle-spinner-icon" />}
+                      </span>
+                    </span>
                   </label>
                 </div>
               </div>
@@ -236,7 +246,7 @@ export default function ShareModal({
               <div className="share-regenerate-section">
                 <button
                   type="button"
-                  className="share-regenerate-btn"
+                  className={`share-regenerate-btn${savingAction === "regenerate" ? " is-loading" : ""}`}
                   onClick={handleRegenerateToken}
                   disabled={saving}
                 >
