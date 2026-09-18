@@ -5,7 +5,7 @@ export default {
     const { endpoint, bucket } = r2FileOrigin();
     return [{
       source: R2_FILE_PROXY_SOURCE,
-      destination: `${endpoint}/${bucket}/spaces/:spaceId/attachments/:attachmentId`,
+      destination: `${endpoint}/${bucket}/:spaceId/attachments/:attachmentId`,
     }];
   },
   async headers() {

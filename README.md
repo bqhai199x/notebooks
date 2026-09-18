@@ -2,7 +2,9 @@
 
 A responsive private list app for desktop and mobile. Notes, images, and attachments are stored in a private **Cloudflare R2** bucket. The Next.js app continues to run on Vercel.
 
-Each access key maps to one isolated space at `spaces/<spaceId>/items.json`. Attachments use unique object keys below that space. File transfers use short-lived signed URLs. By default the browser connects directly to R2. Turn on **Dùng proxy cho tệp** in the main or shared-note toolbar when the network cannot reach R2; file requests then use the app domain through a Vercel external rewrite.
+Each access key maps to one isolated space at `<spaceId>/items.json`, directly under the bucket root. Attachments use unique object keys at `<spaceId>/attachments/<attachmentId>`; multipart upload sessions use `<spaceId>/upload-sessions/<sessionId>.json`. File transfers use short-lived signed URLs. By default the browser connects directly to R2. Turn on **Dùng proxy cho tệp** in the main or shared-note toolbar when the network cannot reach R2; file requests then use the app domain through a Vercel external rewrite.
+
+Migration from the old `spaces/` layout is manual. Remove that prefix from object keys and from attachment `key` values in `items.json`. If retaining completed upload-session JSON documents, also update their `key` and `attachment.key` values. Restart pending multipart uploads after migration. The app reads and writes only the new layout.
 
 ## Setup
 
@@ -66,8 +68,8 @@ Add the R2 variables and access key variables in Vercel Project Settings. Add th
 Keep `R2_ENDPOINT` pointing at Cloudflare, not at Vercel. Endpoint and bucket must be available during build to generate the fixed attachment-only rewrite:
 
 ```text
-/r2-files/spaces/:spaceId/attachments/:attachmentId
-  -> <R2_ENDPOINT>/<R2_BUCKET>/spaces/:spaceId/attachments/:attachmentId
+/r2-files/:spaceId/attachments/:attachmentId
+  -> <R2_ENDPOINT>/<R2_BUCKET>/:spaceId/attachments/:attachmentId
 ```
 
 The rewrite is always configured. There is no `R2_FILE_PROXY_ENABLED` flag or user-supplied destination. The S3 client uses path-style URLs and `requestChecksumCalculation: "WHEN_REQUIRED"`. Proxy URLs replace only the signed path prefix and preserve the signature query. File bytes do not enter a Next.js API handler. The external rewrite must forward method, body, query and `Range` without redirecting to R2, preserving content headers, filename, length, ETag and range responses.
@@ -102,4 +104,4 @@ Run `npm run build` and inspect `.next/routes-manifest.json` for the attachment 
 
 Do not deploy production until the Preview passes the real 200 MB transfer, signature, cache and content-safety checks. Vercel external-rewrite limits and downstream header behavior still require deployed verification; a successful local build does not establish them. If Preview cannot pass, stop the rollout and record the limitation. Do not replace the rewrite with a Function proxy or temporary chunk storage.
 
-Monitor 403/413 responses, timeouts, retry rates and Vercel traffic without logging access keys or complete signed URLs. Users can turn proxy off immediately for new transfers if it has problems. Roll back a faulty deployment when necessary; no object-key changes or data migration are required.
+Monitor 403/413 responses, timeouts, retry rates and Vercel traffic without logging access keys or complete signed URLs. Users can turn proxy off immediately for new transfers if it has problems. Roll back a faulty deployment when necessary. Changing file transport modes does not require object-key changes or data migration.
