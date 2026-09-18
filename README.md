@@ -6,6 +6,8 @@ Attachments are stored until their item is deleted. The browser retrieves each a
 
 Data is stored as a JSON file (`sessions.json`) and an `uploads/` folder in your designated Google Drive folder.
 
+All attachments, including small files and inline images, upload directly from the browser to Google Drive using resumable upload sessions. `/api/uploads` only accepts JSON metadata to create a session; file bytes never pass through a Vercel Function, avoiding `FUNCTION_PAYLOAD_TOO_LARGE` on uploads. OAuth credentials remain on the server, and the browser receives only the URL for that file's upload session. Progress, cancellation, and the configured `MAX_UPLOAD_BYTES` limit apply to every file.
+
 ## Features
 - **Google Drive Storage**: Uses personal Google Drive (15 GB free) via OAuth 2.0 or Google Workspace Shared Drive via Service Account.
 - **Rich-text with Quill**: Embed images, checklists, formatting, and file attachments without leaking Base64 strings.

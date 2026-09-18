@@ -5,6 +5,7 @@ import UnlockCard from "./components/UnlockCard";
 import ItemCard from "./components/ItemCard";
 import ItemComposer from "./components/ItemComposer";
 import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
+import { uploadAttachment } from "../lib/upload-attachment";
 import {
   emptyRichText,
   inlineImageAttachmentIds,
@@ -53,71 +54,6 @@ function itemsInOrder(items, ids) {
 
 function sameItemOrder(left, right) {
   return left.length === right.length && left.every((item, index) => item.id === right[index]?.id);
-}
-
-async function putFileToUrl(url, headers, body) {
-  let result;
-  try {
-    result = await fetch(url, { method: "PUT", headers, body });
-  } catch {
-    throw new Error("Cannot reach storage endpoint. Check your network connection.");
-  }
-  if (result.ok) return result;
-  if (result.status === 403) {
-    throw new Error("Storage service rejected the upload. Check your permissions.");
-  }
-  throw new Error(`Upload failed (${result.status}).`);
-}
-
-function uploadWithXHR(url, method, headers, body, onProgress, signal) {
-  return new Promise((resolve, reject) => {
-    const xhr = new XMLHttpRequest();
-    xhr.open(method, url);
-    if (signal) {
-      if (signal.aborted) {
-        return reject(new Error("Upload đã bị hủy."));
-      }
-      signal.addEventListener("abort", () => {
-        xhr.abort();
-        reject(new Error("Upload đã bị hủy."));
-      });
-    }
-    if (headers) {
-      for (const [key, value] of Object.entries(headers)) {
-        if (value !== undefined && value !== null) {
-          xhr.setRequestHeader(key, value);
-        }
-      }
-    }
-    if (xhr.upload && onProgress) {
-      xhr.upload.onprogress = (event) => {
-        if (event.lengthComputable && event.total > 0) {
-          const percent = Math.min(100, Math.round((event.loaded / event.total) * 100));
-          onProgress(percent, event.loaded, event.total);
-        }
-      };
-    }
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          resolve(xhr.responseText);
-        }
-      } else {
-        let errMsg = `Upload failed (${xhr.status})`;
-        try {
-          const errJson = JSON.parse(xhr.responseText);
-          if (errJson.error) errMsg = errJson.error;
-        } catch {}
-        reject(new Error(errMsg));
-      }
-    };
-    xhr.onerror = () => reject(new Error("Network error during upload. Check your connection."));
-    xhr.onabort = () => reject(new Error("Upload đã bị hủy."));
-    xhr.ontimeout = () => reject(new Error("Upload timed out."));
-    xhr.send(body);
-  });
 }
 
 async function createThumbnail(file, maxDim = 120, quality = 0.65) {
@@ -412,12 +348,11 @@ export default function Home() {
   }
 
   async function callApi(path, options = {}, key = accessKey) {
-    const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
     const response = await fetch(path, {
       ...options,
       headers: {
         "x-notes-access-key": key,
-        ...(isFormData ? {} : { "Content-Type": "application/json" }),
+        "Content-Type": "application/json",
         ...(options.headers || {}),
       },
     });
@@ -815,70 +750,6 @@ export default function Home() {
   }
 
 
-  async function uploadAttachment(file, onProgress, signal) {
-    if (signal?.aborted) throw new Error("Upload đã bị hủy.");
-
-    // Với file <= 20 MB: upload trực tiếp qua FormData lên API server (nhanh, ổn định, không bị lỗi CORS trình duyệt)
-    if (file.size <= 20 * 1024 * 1024) {
-      const formData = new FormData();
-      formData.append("file", file);
-
-      const data = await uploadWithXHR(
-        "/api/uploads",
-        "POST",
-        { "x-notes-access-key": accessKey },
-        formData,
-        onProgress,
-        signal
-      );
-      return data.attachment;
-    }
-
-    // Với file lớn (> 20 MB): Sử dụng Google Drive Resumable Upload
-    const data = await callApi("/api/uploads", {
-      method: "POST",
-      body: JSON.stringify({
-        action: "initiate",
-        name: file.name,
-        contentType: file.type,
-        size: file.size,
-      }),
-    });
-
-    try {
-      if (data.upload?.mode === "resumable") {
-        const headers = {
-          "Content-Type": file.type || "application/octet-stream",
-        };
-        if (data.upload.accessToken) {
-          headers["Authorization"] = `Bearer ${data.upload.accessToken}`;
-        }
-        const googleFile = await uploadWithXHR(
-          data.upload.url,
-          "PUT",
-          headers,
-          file,
-          onProgress,
-          signal
-        );
-        if (googleFile?.id) {
-          data.attachment.key = googleFile.id;
-        }
-        await callApi("/api/uploads", {
-          method: "POST",
-          body: JSON.stringify({ action: "complete" }),
-        }).catch(() => {});
-        return data.attachment;
-      }
-      throw new Error("Upload setup returned an invalid response.");
-    } catch (error) {
-      if (data.attachment?.key) {
-        await callApi(`/api/uploads?key=${encodeURIComponent(data.attachment.key)}`, { method: "DELETE" }).catch(() => {});
-      }
-      throw error;
-    }
-  }
-
   async function uploadSelectedFilesForNote(noteId, attachments, signal) {
     const uploaded = [];
     const completed = [];
@@ -908,14 +779,19 @@ export default function Home() {
           name: attachment.file.name,
         });
 
-        const storedAttachment = await uploadAttachment(attachment.file, (percent) => {
-          setNoteProgress({
-            percent,
-            current: fileIndex,
-            total: totalFiles,
-            name: attachment.file.name,
-          });
-        }, signal);
+        const storedAttachment = await uploadAttachment({
+          file: attachment.file,
+          callApi,
+          signal,
+          onProgress: (percent) => {
+            setNoteProgress({
+              percent,
+              current: fileIndex,
+              total: totalFiles,
+              name: attachment.file.name,
+            });
+          },
+        });
 
         uploaded.push(storedAttachment);
         let thumbnail = attachment.thumbnail;
@@ -931,6 +807,7 @@ export default function Home() {
           },
         });
       }
+      if (signal?.aborted) throw new Error("Upload đã bị hủy.");
       return { completed, uploaded };
     } catch (error) {
       await Promise.allSettled(uploaded.map((attachment) => (

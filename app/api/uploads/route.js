@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
@@ -38,42 +37,14 @@ export async function POST(request) {
   const denied = authorize(request);
   if (denied) return denied;
 
-  const spaceId = getAccessSpace(request);
-  const reqContentType = request.headers.get("content-type") || "";
-
-  // 1. Direct FormData upload (tối ưu cho ảnh và file thông thường, không lo vấn đề CORS trình duyệt)
-  if (reqContentType.includes("multipart/form-data")) {
-    try {
-      const formData = await request.formData();
-      const file = formData.get("file");
-      if (!file || typeof file === "string") {
-        return response({ error: "Choose a non-empty file first." }, 400);
-      }
-      if (file.size > maxUploadBytes()) {
-        return response({ error: `Each file is limited to ${readableSize(maxUploadBytes())}.` }, 413);
-      }
-
-      const stream = Readable.fromWeb(file.stream());
-      const { uploadAttachmentDirect } = await import("../../../lib/gdrive-notes");
-      const attachment = await uploadAttachmentDirect({
-        id: randomUUID(),
-        name: file.name,
-        contentType: file.type,
-        data: stream,
-        size: file.size,
-        spaceId,
-      });
-
-      return response({ attachment }, 201);
-    } catch (error) {
-      console.error("Direct upload error:", error);
-      return response({ error: "Upload failed: " + (error.message || "Unknown error") }, 500);
-    }
+  const reqContentType = (request.headers.get("content-type") || "").split(";")[0].trim().toLowerCase();
+  if (reqContentType !== "application/json") {
+    return response({ error: "Send file metadata as JSON, then upload the file directly to Google Drive." }, 415);
   }
 
-  // 2. JSON actions (initiate session, complete, abort)
+  const spaceId = getAccessSpace(request);
   const body = await request.json().catch(() => null);
-  if (!body || typeof body !== "object") return response({ error: "Invalid upload request." }, 400);
+  if (!body || typeof body !== "object" || Array.isArray(body)) return response({ error: "Invalid upload request." }, 400);
 
   try {
     if (body.action === "initiate") {
@@ -85,7 +56,7 @@ export async function POST(request) {
         return response({ error: `Each file is limited to ${readableSize(maxUploadBytes())}.` }, 413);
       }
 
-      const origin = request.headers.get("origin") || undefined;
+      const origin = request.headers.get("origin") || new URL(request.url).origin;
       const { createAttachmentUpload } = await import("../../../lib/gdrive-notes");
       const result = await createAttachmentUpload({
         id: randomUUID(),
@@ -96,18 +67,6 @@ export async function POST(request) {
         origin,
       });
       return response(result, 201);
-    }
-
-    if (body.action === "complete") {
-      const { completeAttachmentUpload } = await import("../../../lib/gdrive-notes");
-      await completeAttachmentUpload();
-      return response({ success: true });
-    }
-
-    if (body.action === "abort") {
-      const { abortAttachmentUpload } = await import("../../../lib/gdrive-notes");
-      await abortAttachmentUpload({ key: body.key });
-      return response({ success: true });
     }
 
     return response({ error: "Unknown upload action." }, 400);
