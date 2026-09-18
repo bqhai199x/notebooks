@@ -420,13 +420,6 @@ export default function RichTextEditor({
       // Suppress keyboard popup on toolbar interaction for touch devices
       let suppressFocus = false;
       let suppressTimer = null;
-      let lastGoodRange = null;
-
-      editor.on("selection-change", (range) => {
-        if (range) {
-          lastGoodRange = range;
-        }
-      });
 
       const triggerSuppress = (e) => {
         // Only suppress keyboard popup for touch interactions, never for desktop mouse clicks
@@ -458,15 +451,15 @@ export default function RichTextEditor({
 
       const origFocus = editor.focus.bind(editor);
       editor.focus = (...args) => {
-        // Always restore the user's selection range so formatting operations never lose selected content!
-        const rangeToRestore = lastGoodRange || editor.selection?.savedRange;
-        if (rangeToRestore && editor.selection) {
-          try {
-            editor.selection.setRange(rangeToRestore, false, "silent");
-          } catch {}
-        }
-
         if (suppressFocus) {
+          // Quill keeps savedRange current even for silent moves (e.g. Enter).
+          // Restore it only if a touch toolbar interaction moved focus away.
+          const rangeToRestore = editor.selection?.savedRange;
+          if (!editor.hasFocus() && rangeToRestore) {
+            try {
+              editor.selection.setRange(rangeToRestore, false, "silent");
+            } catch {}
+          }
           return;
         }
         return origFocus(...args);
