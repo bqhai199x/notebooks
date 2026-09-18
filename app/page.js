@@ -195,7 +195,7 @@ export default function Home() {
   );
 
   function revokeUrl(url) {
-    if (!url) return;
+    if (!url || !objectUrls.current.has(url)) return;
     URL.revokeObjectURL(url);
     objectUrls.current.delete(url);
   }
@@ -589,30 +589,34 @@ export default function Home() {
   }, [locked]);
 
   async function loadAttachment(attachment) {
-    const query = new URLSearchParams({ key: attachment.key });
+    const query = new URLSearchParams({
+      key: attachment.key,
+      name: attachment.name || "download",
+      format: "json",
+    });
     const response = await fetch(`/api/files?${query.toString()}`, {
       headers: { "x-notes-access-key": accessKey },
     });
     if (!response.ok) throw new Error("Could not load attachment.");
-    const blob = await response.blob();
-    const url = URL.createObjectURL(blob);
-    objectUrls.current.add(url);
+    const { url } = await response.json();
+    if (typeof url !== "string") throw new Error("Could not load attachment.");
 
     if (!attachment.thumbnail && (attachment.contentType?.startsWith("image/") || attachment.kind === "image")) {
-      void createThumbnail(blob).then((thumb) => {
-        if (thumb) {
+      void fetch(url)
+        .then((res) => res.ok ? res.blob() : null)
+        .then((blob) => blob ? createThumbnail(blob) : null)
+        .then((thumb) => {
+          if (!thumb) return;
           attachment.thumbnail = thumb;
           setItems((current) => current.map((it) => {
-            if (it.attachments?.some((a) => a.id === attachment.id)) {
-              return {
-                ...it,
-                attachments: it.attachments.map((a) => a.id === attachment.id ? { ...a, thumbnail: thumb } : a),
-              };
-            }
-            return it;
+            if (!it.attachments?.some((a) => a.id === attachment.id)) return it;
+            return {
+              ...it,
+              attachments: it.attachments.map((a) => a.id === attachment.id ? { ...a, thumbnail: thumb } : a),
+            };
           }));
-        }
-      });
+        })
+        .catch(() => {});
     }
 
     return url;
@@ -624,7 +628,12 @@ export default function Home() {
     setNotice("");
 
     try {
-      const query = new URLSearchParams({ key: attachment.key, download: "1" });
+      const query = new URLSearchParams({
+        key: attachment.key,
+        name: attachment.name || "download",
+        download: "1",
+        format: "json",
+      });
       const response = await fetch(`/api/files?${query.toString()}`, {
         headers: { "x-notes-access-key": accessKey },
       });
@@ -632,16 +641,15 @@ export default function Home() {
         const payload = await response.json().catch(() => ({}));
         throw new Error(payload.error || "Could not download attachment.");
       }
-      const blob = await response.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      const { url } = await response.json();
+      if (typeof url !== "string") throw new Error("Could not download attachment.");
       const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = attachment.name || "download";
+      link.href = url;
       link.rel = "noreferrer";
       document.body.append(link);
       link.click();
       link.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
+      setNotice("Đã bắt đầu tải tệp.");
     } catch (error) {
       setNotice(error.message || "Could not download attachment.");
     } finally {
@@ -752,53 +760,49 @@ export default function Home() {
 
   async function uploadSelectedFilesForNote(noteId, attachments, signal) {
     const uploaded = [];
-    const completed = [];
     const filesToUpload = attachments.filter((a) => a.file);
     const totalFiles = filesToUpload.length;
-    let fileIndex = 0;
+    const completedBySourceId = new Map();
+    const progressBySourceId = new Map(filesToUpload.map((attachment) => [attachment.id, 0]));
 
-    const setNoteProgress = (progress) => {
+    const reportProgress = () => {
+      const totalBytes = filesToUpload.reduce((total, attachment) => total + attachment.file.size, 0);
+      const uploadedBytes = filesToUpload.reduce((total, attachment) => (
+        total + attachment.file.size * (progressBySourceId.get(attachment.id) || 0) / 100
+      ), 0);
+      const completedFiles = filesToUpload.filter((attachment) => (progressBySourceId.get(attachment.id) || 0) >= 100).length;
+      const activeFile = filesToUpload.find((attachment) => (progressBySourceId.get(attachment.id) || 0) < 100);
       setItems((current) => current.map((it) => (it.id === noteId ? {
         ...it,
-        _uploadProgress: progress,
+        _uploadProgress: {
+          percent: totalBytes ? Math.min(100, Math.round(uploadedBytes / totalBytes * 100)) : 100,
+          current: Math.min(totalFiles, completedFiles + 1),
+          total: totalFiles,
+          name: activeFile?.file.name || filesToUpload.at(-1)?.file.name || "tệp tin",
+        },
       } : it)));
     };
 
     try {
-      for (const attachment of attachments) {
+      async function uploadOne(attachment) {
         if (signal?.aborted) throw new Error("Upload đã bị hủy.");
-        if (!attachment.file) {
-          completed.push({ sourceId: attachment.id, attachment });
-          continue;
-        }
-        fileIndex += 1;
-        setNoteProgress({
-          percent: 0,
-          current: fileIndex,
-          total: totalFiles,
-          name: attachment.file.name,
-        });
-
         const storedAttachment = await uploadAttachment({
           file: attachment.file,
           callApi,
           signal,
           onProgress: (percent) => {
-            setNoteProgress({
-              percent,
-              current: fileIndex,
-              total: totalFiles,
-              name: attachment.file.name,
-            });
+            progressBySourceId.set(attachment.id, percent);
+            reportProgress();
           },
         });
-
         uploaded.push(storedAttachment);
         let thumbnail = attachment.thumbnail;
         if (!thumbnail && attachment.file?.type?.startsWith("image/")) {
           thumbnail = await createThumbnail(attachment.file);
         }
-        completed.push({
+        progressBySourceId.set(attachment.id, 100);
+        reportProgress();
+        completedBySourceId.set(attachment.id, {
           sourceId: attachment.id,
           attachment: {
             ...storedAttachment,
@@ -807,7 +811,17 @@ export default function Home() {
           },
         });
       }
+
+      // Keep at most two attachment files active; each file uploads up to three R2 parts in parallel.
+      for (let index = 0; index < filesToUpload.length; index += 2) {
+        const results = await Promise.allSettled(filesToUpload.slice(index, index + 2).map(uploadOne));
+        const failed = results.find((result) => result.status === "rejected");
+        if (failed) throw failed.reason;
+      }
       if (signal?.aborted) throw new Error("Upload đã bị hủy.");
+      const completed = attachments.map((attachment) => (
+        attachment.file ? completedBySourceId.get(attachment.id) : { sourceId: attachment.id, attachment }
+      ));
       return { completed, uploaded };
     } catch (error) {
       await Promise.allSettled(uploaded.map((attachment) => (
@@ -815,7 +829,10 @@ export default function Home() {
       )));
       throw error;
     } finally {
-      setNoteProgress(null);
+      setItems((current) => current.map((it) => (it.id === noteId ? {
+        ...it,
+        _uploadProgress: null,
+      } : it)));
     }
   }
 
@@ -883,7 +900,7 @@ export default function Home() {
           _rawDraft: noteDraft,
           _rawPending: notePending,
           _syncStatus: "error",
-          _syncError: error.message || "Lỗi lưu ghi chú lên Google Drive.",
+          _syncError: error.message || "Không thể lưu ghi chú.",
           _uploadProgress: null,
         };
         persistUnsyncedItem(errorItem);
@@ -1054,7 +1071,7 @@ export default function Home() {
           _rawPending: noteAttachments,
           _previousItem: previousItem,
           _syncStatus: "error",
-          _syncError: error.message || "Không thể lưu thay đổi lên Google Drive.",
+          _syncError: error.message || "Không thể lưu thay đổi.",
           _uploadProgress: null,
         };
         persistUnsyncedItem(errorItem);

@@ -31,7 +31,7 @@ export async function GET(request) {
       return response({ error: "Thiếu thông tin liên kết chia sẻ." }, 400);
     }
 
-    const { getItems } = await import("../../../lib/gdrive-notes");
+    const { getItems } = await import("../../../lib/r2-notes");
     let items = await getItems(spaceId);
     let item = items.find((entry) => entry.id === id);
 
@@ -75,6 +75,8 @@ export async function GET(request) {
 
 export async function PATCH(request) {
   try {
+    const { storageIsReadOnly } = await import("../../../lib/r2-notes");
+    if (storageIsReadOnly()) return response({ error: "Notes are temporarily read-only while storage maintenance is in progress." }, 503);
     const input = await request.json();
     const { id, token, content, contentFormat } = input;
     let spaceId = safeSpaceId(input.space);
@@ -86,7 +88,7 @@ export async function PATCH(request) {
     const prepared = prepareRichTextContent(content ?? "", contentFormat);
 
     let updatedItem = null;
-    const { getItemsWithMeta, saveItems, getItems } = await import("../../../lib/gdrive-notes");
+    const { getItemsWithMeta, saveItems, getItems } = await import("../../../lib/r2-notes");
 
     // Verify space where item actually resides
     let itemsCheck = await getItems(spaceId);
@@ -159,6 +161,10 @@ export async function PATCH(request) {
     });
   } catch (error) {
     console.error("Share PATCH error:", error);
+    if (error?.name === "PreconditionFailed" || error?.status === 412 || error?.$metadata?.httpStatusCode === 412) {
+      return response({ error: "Ghi chú vừa thay đổi. Hãy tải lại và thử lại." }, 409);
+    }
+    if (error?.status === 503) return response({ error: error.message }, 503);
     return response({ error: "Không thể lưu thay đổi cho ghi chú." }, 500);
   }
 }

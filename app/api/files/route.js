@@ -1,4 +1,3 @@
-import { Readable } from "node:stream";
 import { NextResponse } from "next/server";
 import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
 
@@ -6,10 +5,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 function response(data, status = 200) {
-  return NextResponse.json(data, {
-    status,
-    headers: { "Cache-Control": "no-store" },
-  });
+  return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
 }
 
 function authorize(request) {
@@ -29,45 +25,25 @@ export async function GET(request) {
     if (!key) return response({ error: "File not found." }, 400);
 
     const isDownload = search.get("download") === "1";
-
-    const ifNoneMatch = request.headers.get("if-none-match");
-    if (ifNoneMatch && !isDownload) {
-      const { getAttachmentMeta } = await import("../../../lib/gdrive-notes");
-      const meta = await getAttachmentMeta({ key, spaceId });
-      if (meta.eTag && (ifNoneMatch === meta.eTag || ifNoneMatch === `"${meta.eTag}"` || ifNoneMatch === meta.eTag.replace(/^"|"$/g, ""))) {
-        return new NextResponse(null, {
-          status: 304,
-          headers: {
-            "Cache-Control": "private, max-age=86400, stale-while-revalidate=604800",
-            "ETag": meta.eTag,
-          },
-        });
-      }
-    }
-
-    const { getAttachment, contentDisposition } = await import("../../../lib/gdrive-notes");
-    const file = await getAttachment({ key, spaceId });
-
-    const stream = typeof file.body.transformToWebStream === "function"
-      ? file.body.transformToWebStream()
-      : Readable.toWeb(file.body);
-
-    const disposition = isDownload
-      ? (typeof contentDisposition === "function" ? contentDisposition(file.safeName, false) : `attachment; filename*=UTF-8''${encodeURIComponent(file.safeName || "download")}`)
-      : (file.contentDisposition || "attachment");
-
-    return new NextResponse(stream, {
-      headers: {
-        "Cache-Control": isDownload ? "no-cache" : "private, max-age=86400, stale-while-revalidate=604800",
-        "Content-Type": file.contentType,
-        "Content-Disposition": disposition,
-        "X-Content-Type-Options": "nosniff",
-        ...(file.eTag ? { "ETag": file.eTag } : {}),
-        ...(file.contentLength ? { "Content-Length": String(file.contentLength) } : {}),
-      },
+    const format = search.get("format");
+    const name = search.get("name") || "download";
+    const { getAttachmentMeta, getAttachmentDownloadUrl } = await import("../../../lib/r2-notes");
+    const meta = await getAttachmentMeta({ key, spaceId });
+    const url = await getAttachmentDownloadUrl({
+      key,
+      name,
+      contentType: meta.mimeType,
+      download: isDownload,
+      spaceId,
     });
+
+    if (format === "json") {
+      return response({ url, expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
+    }
+    return NextResponse.redirect(url, { status: 302, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("Attachment URL error:", error);
-    return response({ error: "Could not open file." }, 500);
+    const status = error?.$metadata?.httpStatusCode || error?.status;
+    return response({ error: status === 404 ? "File not found." : "Could not open file." }, status === 404 ? 404 : 500);
   }
 }

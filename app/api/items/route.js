@@ -76,6 +76,19 @@ function attachments(value) {
   return normalized;
 }
 
+async function verifyStoredAttachments(itemAttachments, spaceId) {
+  const { attachmentKeyBelongsToSpace, getAttachmentMeta } = await import("../../../lib/r2-notes");
+  await Promise.all(itemAttachments
+    .filter((attachment) => attachment.kind !== "link")
+    .map(async (attachment) => {
+      if (!attachmentKeyBelongsToSpace(attachment.key, spaceId)) throw new Error("Invalid attachment.");
+      const meta = await getAttachmentMeta({ key: attachment.key, spaceId });
+      if (meta.size !== attachment.size || meta.mimeType !== attachment.contentType) {
+        throw new Error("Attachment verification failed.");
+      }
+    }));
+}
+
 function validateInlineImages(delta, itemAttachments) {
   if (!delta) return;
 
@@ -110,13 +123,17 @@ async function body(request) {
 
 function errorResponse(error) {
   console.error("Items API error:", error);
+  if (error?.name === "PreconditionFailed" || error?.status === 412 || error?.$metadata?.httpStatusCode === 412) {
+    return response({ error: "The list changed. Refresh and try again." }, 409);
+  }
+  if (error?.status === 503) return response({ error: error.message }, 503);
   return response({ error: "Could not save your notes. Try again." }, 500);
 }
 
 const MAX_RETRIES = 3;
 
 async function modifyItemsWithRetry(mutator, spaceId = null) {
-  const { getItemsWithMeta, saveItems } = await import("../../../lib/gdrive-notes");
+  const { getItemsWithMeta, saveItems } = await import("../../../lib/r2-notes");
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
     const { items, eTag } = await getItemsWithMeta(spaceId);
     const result = await mutator(items);
@@ -144,7 +161,7 @@ export async function GET(request) {
 
   try {
     const spaceId = getAccessSpace(request);
-    const { getItems } = await import("../../../lib/gdrive-notes");
+    const { getItems } = await import("../../../lib/r2-notes");
     return response({ items: await getItems(spaceId), spaceId: spaceId || "default" });
   } catch (error) {
     return errorResponse(error);
@@ -156,9 +173,12 @@ export async function POST(request) {
   if (denied) return denied;
 
   try {
+    const { storageIsReadOnly } = await import("../../../lib/r2-notes");
+    if (storageIsReadOnly()) return response({ error: "Notes are temporarily read-only while storage maintenance is in progress." }, 503);
     const spaceId = getAccessSpace(request);
     const input = await body(request);
     const itemAttachments = attachments(input.attachments);
+    await verifyStoredAttachments(itemAttachments, spaceId);
     const prepared = itemContent(input, itemAttachments);
     if (!hasItemContent(prepared) && itemAttachments.length === 0) {
       return response({ error: "Item is empty." }, 400);
@@ -190,6 +210,8 @@ export async function PATCH(request) {
   if (denied) return denied;
 
   try {
+    const { storageIsReadOnly } = await import("../../../lib/r2-notes");
+    if (storageIsReadOnly()) return response({ error: "Notes are temporarily read-only while storage maintenance is in progress." }, 503);
     const spaceId = getAccessSpace(request);
     const input = await body(request);
     if (
@@ -201,11 +223,11 @@ export async function PATCH(request) {
       return response({ error: "Invalid request." }, 400);
     }
 
-    const { deleteAttachments } = await import("../../../lib/gdrive-notes");
+    const { deleteUnreferencedAttachments } = await import("../../../lib/r2-notes");
     let removedAttachmentKeys = [];
     let updatedItem = null;
 
-    const result = await modifyItemsWithRetry((items) => {
+    const result = await modifyItemsWithRetry(async (items) => {
       const index = items.findIndex((entry) => entry.id === input.id);
       if (index === -1) {
         return { abort: true, notFound: true };
@@ -256,6 +278,7 @@ export async function PATCH(request) {
       const itemAttachments = Array.isArray(input.attachments)
         ? attachments(input.attachments)
         : items[index].attachments;
+      if (Array.isArray(input.attachments)) await verifyStoredAttachments(itemAttachments, spaceId);
       const prepared = itemContent(input, itemAttachments);
       if (!hasItemContent(prepared) && itemAttachments.length === 0) {
         return { abort: true, empty: true };
@@ -284,7 +307,7 @@ export async function PATCH(request) {
     }
 
     if (removedAttachmentKeys.length > 0) {
-      await deleteAttachments(removedAttachmentKeys, spaceId);
+      await deleteUnreferencedAttachments(removedAttachmentKeys, spaceId);
     }
 
     if (result?.isDelete) {

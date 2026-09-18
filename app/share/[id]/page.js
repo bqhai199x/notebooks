@@ -140,22 +140,20 @@ export default function SharePage({ params, searchParams }) {
   const handleDownloadAttachment = async (attachment) => {
     if (!attachment?.key || downloadingAttachments[attachment.id]) return;
     setDownloadingAttachments((prev) => ({ ...prev, [attachment.id]: true }));
-    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1`;
+    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1&format=json`;
     try {
       const res = await fetch(downloadUrl);
       if (!res.ok) throw new Error("Download failed");
-      const blob = await res.blob();
-      const blobUrl = URL.createObjectURL(blob);
+      const { url } = await res.json();
+      if (typeof url !== "string") throw new Error("Download failed");
       const link = document.createElement("a");
-      link.href = blobUrl;
-      link.download = attachment.name || "download";
+      link.href = url;
+      link.rel = "noreferrer";
       document.body.appendChild(link);
       link.click();
       link.remove();
-      setTimeout(() => URL.revokeObjectURL(blobUrl), 15000);
     } catch {
-      // Fallback direct download
-      window.location.href = downloadUrl;
+      window.location.href = downloadUrl.replace("&format=json", "");
     } finally {
       setDownloadingAttachments((prev) => {
         const next = { ...prev };

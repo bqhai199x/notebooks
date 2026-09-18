@@ -93,7 +93,6 @@ async function main() {
   await sharp(svgBuffer).resize(512, 512).png().toFile(path.join(publicDir, "icon.png"));
   await sharp(svgBuffer).resize(192, 192).png().toFile(path.join(publicDir, "icon-192.png"));
   await sharp(svgBuffer).resize(180, 180).png().toFile(path.join(publicDir, "apple-touch-icon.png"));
-  await sharp(svgBuffer).resize(120, 120).png().toFile(path.join(publicDir, "google-app-logo.png"));
 
   // 2. Favicons
   const png16 = await sharp(svgBuffer).resize(16, 16).png().toBuffer();

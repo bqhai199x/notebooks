@@ -416,7 +416,7 @@ export default function ItemCard({
                 <line x1="12" y1="16" x2="12.01" y2="16" />
               </svg>
               <span className="item-sync-error-text">
-                {item._syncError || "Không thể lưu ghi chú lên Google Drive."}
+                {item._syncError || "Không thể lưu ghi chú."}
               </span>
             </div>
             <div className="item-sync-error-actions">

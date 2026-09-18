@@ -1,15 +1,16 @@
 {
-  "name": "notes-gdrive",
+  "name": "notes-r2",
   "version": "1.0.0",
   "private": true,
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start",
-    "auth:gdrive": "node scripts/setup-gdrive-auth.mjs"
+    "start": "next start"
   },
   "dependencies": {
-    "googleapis": "^181.0.0",
+    "@aws-sdk/client-s3": "^3.901.0",
+    "@aws-sdk/lib-storage": "^3.901.0",
+    "@aws-sdk/s3-request-presigner": "^3.901.0",
     "next": "^16.0.0",
     "quill": "^2.0.3",
     "react": "^19.0.0",
