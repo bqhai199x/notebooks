@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
+import { parseFileTransport } from "../../../lib/file-transport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -21,6 +22,7 @@ export async function GET(request) {
   try {
     const spaceId = getAccessSpace(request);
     const search = new URL(request.url).searchParams;
+    const transport = parseFileTransport(search.get("transport") ?? undefined);
     const key = search.get("key");
     if (!key) return response({ error: "File not found." }, 400);
 
@@ -35,15 +37,17 @@ export async function GET(request) {
       contentType: meta.mimeType,
       download: isDownload,
       spaceId,
+      transport,
     });
 
     if (format === "json") {
       return response({ url, expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
     }
-    return NextResponse.redirect(url, { status: 302, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.redirect(new URL(url, request.url), { status: 302, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error("Attachment URL error:", error);
     const status = error?.$metadata?.httpStatusCode || error?.status;
+    if (status === 400) return response({ error: error.message }, 400);
+    console.error("Attachment URL error:", { status, name: error?.name });
     return response({ error: status === 404 ? "File not found." : "Could not open file." }, status === 404 ? 404 : 500);
   }
 }

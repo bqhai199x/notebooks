@@ -178,6 +178,65 @@ h1, h2, h3, p, ol, ul {
   gap: 8px;
 }
 
+.file-transport-control {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  max-width: 285px;
+  min-width: 0;
+}
+
+.file-transport-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.file-transport-label input {
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  accent-color: var(--success);
+  cursor: pointer;
+}
+
+.file-transport-label input:focus-visible {
+  outline: 2px solid var(--success);
+  outline-offset: 3px;
+}
+
+.file-transport-control small {
+  font-size: 0.68rem;
+  line-height: 1.4;
+  color: var(--text-secondary);
+}
+
+.file-transport-control small:empty {
+  display: none;
+}
+
+@media (max-width: 600px) {
+  .app-header,
+  .shared-header {
+    flex-wrap: wrap;
+  }
+
+  .header-actions,
+  .shared-header-actions {
+    width: 100%;
+    justify-content: flex-end;
+  }
+
+  .file-transport-control {
+    margin-right: auto;
+    max-width: 260px;
+  }
+}
+
 /* Common Button Styles */
 .btn {
   display: inline-flex;

@@ -97,7 +97,7 @@ function hydrateImageSources(root, imageUrls) {
       }
     } else {
       const currentSrc = image.getAttribute("src");
-      if (!currentSrc || currentSrc === "about:blank") {
+      if (!currentSrc || (!currentSrc.startsWith("blob:") && !currentSrc.startsWith("data:image/"))) {
         image.setAttribute("src", EMPTY_IMAGE_SRC);
       }
     }

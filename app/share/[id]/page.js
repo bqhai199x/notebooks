@@ -4,6 +4,8 @@ import { useState, useEffect, useRef, useMemo, use } from "react";
 import RichTextEditor from "../../components/RichTextEditor";
 import AttachmentList from "../../components/AttachmentList";
 import AttachmentTypeIcon from "../../components/AttachmentTypeIcon";
+import FileTransportSwitch from "../../components/FileTransportSwitch";
+import { getFileTransportState, useFileTransport } from "../../../lib/use-file-transport";
 import {
   inlineImageAttachmentIds,
   richTextForDisplay,
@@ -19,6 +21,7 @@ function formatDate(value) {
 }
 
 export default function SharePage({ params, searchParams }) {
+  const fileTransport = useFileTransport();
   const unwrappedParams = use(params);
   const unwrappedSearch = use(searchParams);
 
@@ -39,6 +42,7 @@ export default function SharePage({ params, searchParams }) {
   const [editAttachments, setEditAttachments] = useState([]);
   const [saving, setSaving] = useState(false);
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
+  const [previews, setPreviews] = useState({ state: null, urls: {} });
 
   useEffect(() => {
     async function loadSharedNote() {
@@ -112,15 +116,35 @@ export default function SharePage({ params, searchParams }) {
       : []
   ), [item, inlineImageIds]);
 
-  // Map attachment keys to the secure share files endpoint
-  const attachmentUrls = {};
-  if (item?.attachments && activeId && activeToken) {
-    for (const att of item.attachments) {
-      if (att.key) {
-        attachmentUrls[att.id] = `/api/share/files?key=${encodeURIComponent(att.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}`;
-      }
+  const attachmentUrls = previews.state === fileTransport ? previews.urls : {};
+  useEffect(() => {
+    const controller = new AbortController();
+    setPreviews({ state: fileTransport, urls: {} });
+    if (!fileTransport || !item?.attachments || !activeId || !activeToken) return;
+    const isCurrent = () => !controller.signal.aborted && getFileTransportState() === fileTransport;
+    for (const attachment of item.attachments) {
+      if (!attachment.key || attachment.kind !== "image") continue;
+      const query = new URLSearchParams({
+        key: attachment.key,
+        id: activeId,
+        token: activeToken,
+        space: activeSpace,
+        format: "json",
+        transport: fileTransport.transport,
+      });
+      void fetch(`/api/share/files?${query}`, { signal: controller.signal })
+        .then(async (response) => {
+          if (!response.ok) throw new Error("Could not load shared preview.");
+          const { url } = await response.json();
+          if (typeof url !== "string" || !isCurrent()) return;
+          setPreviews((current) => isCurrent()
+            ? { state: fileTransport, urls: { ...current.urls, [attachment.id]: url } }
+            : current);
+        })
+        .catch(() => {}); // Changing transport requests a fresh URL, including failed previews.
     }
-  }
+    return () => controller.abort();
+  }, [item, activeId, activeToken, activeSpace, fileTransport]);
 
   const handleCopyText = async () => {
     try {
@@ -140,7 +164,7 @@ export default function SharePage({ params, searchParams }) {
   const handleDownloadAttachment = async (attachment) => {
     if (!attachment?.key || downloadingAttachments[attachment.id]) return;
     setDownloadingAttachments((prev) => ({ ...prev, [attachment.id]: true }));
-    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1&format=json`;
+    const downloadUrl = `/api/share/files?key=${encodeURIComponent(attachment.key)}&id=${encodeURIComponent(activeId)}&token=${encodeURIComponent(activeToken)}&space=${encodeURIComponent(activeSpace)}&download=1&format=json&transport=${getFileTransportState().transport}`;
     try {
       const res = await fetch(downloadUrl);
       if (!res.ok) throw new Error("Download failed");
@@ -252,6 +276,7 @@ export default function SharePage({ params, searchParams }) {
           </div>
 
           <div className="shared-header-actions">
+            <FileTransportSwitch />
             {allowEdit && !isEditing && (
               <button
                 type="button"

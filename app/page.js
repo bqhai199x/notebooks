@@ -5,6 +5,8 @@ import UnlockCard from "./components/UnlockCard";
 import ItemCard from "./components/ItemCard";
 import ItemComposer from "./components/ItemComposer";
 import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
+import FileTransportSwitch from "./components/FileTransportSwitch";
+import { getFileTransportState, useFileTransport } from "../lib/use-file-transport";
 import { uploadAttachment } from "../lib/upload-attachment";
 import {
   emptyRichText,
@@ -106,7 +108,12 @@ function persistedAttachment(attachment) {
   return value;
 }
 
+function localAttachmentUrls(urls) {
+  return Object.fromEntries(Object.entries(urls).filter(([, url]) => url.startsWith("blob:") || url.startsWith("data:image/")));
+}
+
 export default function Home() {
+  const fileTransport = useFileTransport();
   const [items, setItems] = useState([]);
   const [accessKey, setAccessKey] = useState("");
   const [accessInput, setAccessInput] = useState("");
@@ -124,6 +131,7 @@ export default function Home() {
   const [editDraft, setEditDraft] = useState(() => emptyRichText());
   const [editAttachments, setEditAttachments] = useState([]);
   const [attachmentUrls, setAttachmentUrls] = useState({});
+  const [previewTick, setPreviewTick] = useState(0);
   const [downloadingAttachments, setDownloadingAttachments] = useState({});
   const [pullDistance, setPullDistance] = useState(0);
   const [isPulling, setIsPulling] = useState(false);
@@ -134,8 +142,12 @@ export default function Home() {
   const itemsListRef = useRef(null);
   const itemsRef = useRef([]);
   const objectUrls = useRef(new Set());
-  const loadingAttachments = useRef(new Set());
+  const loadingAttachments = useRef(new Map());
   const failedAttachments = useRef(new Set());
+  const previewGeneration = useRef(null);
+  const attachmentTransport = useRef(null);
+  const visibleAttachmentUrls = attachmentTransport.current === fileTransport
+    ? attachmentUrls : localAttachmentUrls(attachmentUrls);
   const dragCounterRef = useRef(0);
   const isInternalDragRef = useRef(false);
   const pendingRef = useRef([]);
@@ -201,6 +213,8 @@ export default function Home() {
   }
 
   function clearAttachmentUrls() {
+    previewGeneration.current = null;
+    loadingAttachments.current.forEach((controller) => controller.abort());
     objectUrls.current.forEach((url) => URL.revokeObjectURL(url));
     objectUrls.current.clear();
     failedAttachments.current.clear();
@@ -360,7 +374,7 @@ export default function Home() {
 
     if (!response.ok) {
       if (response.status === 401) {
-        localStorage.removeItem(ACCESS_KEY_STORAGE);
+        try { localStorage.removeItem(ACCESS_KEY_STORAGE); } catch {}
         setLocked(true);
       }
       throw new Error(payload.error || "Something went wrong.");
@@ -588,27 +602,30 @@ export default function Home() {
     };
   }, [locked]);
 
-  async function loadAttachment(attachment) {
+  async function loadAttachment(attachment, signal, isCurrent, transport) {
     const query = new URLSearchParams({
       key: attachment.key,
       name: attachment.name || "download",
       format: "json",
+      transport,
     });
     const response = await fetch(`/api/files?${query.toString()}`, {
       headers: { "x-notes-access-key": accessKey },
+      signal,
     });
     if (!response.ok) throw new Error("Could not load attachment.");
     const { url } = await response.json();
     if (typeof url !== "string") throw new Error("Could not load attachment.");
+    if (!isCurrent()) return null;
 
     if (!attachment.thumbnail && (attachment.contentType?.startsWith("image/") || attachment.kind === "image")) {
-      void fetch(url)
+      await fetch(url, { signal })
         .then((res) => res.ok ? res.blob() : null)
         .then((blob) => blob ? createThumbnail(blob) : null)
         .then((thumb) => {
-          if (!thumb) return;
+          if (!thumb || !isCurrent()) return;
           attachment.thumbnail = thumb;
-          setItems((current) => current.map((it) => {
+          setItems((current) => !isCurrent() ? current : current.map((it) => {
             if (!it.attachments?.some((a) => a.id === attachment.id)) return it;
             return {
               ...it,
@@ -633,6 +650,7 @@ export default function Home() {
         name: attachment.name || "download",
         download: "1",
         format: "json",
+        transport: getFileTransportState().transport,
       });
       const response = await fetch(`/api/files?${query.toString()}`, {
         headers: { "x-notes-access-key": accessKey },
@@ -662,7 +680,8 @@ export default function Home() {
   }
 
   useEffect(() => {
-    const savedKey = localStorage.getItem(ACCESS_KEY_STORAGE);
+    let savedKey;
+    try { savedKey = localStorage.getItem(ACCESS_KEY_STORAGE); } catch {}
     if (savedKey) {
       setAccessKey(savedKey);
       loadItems(savedKey);
@@ -693,72 +712,77 @@ export default function Home() {
   }, []);
 
   useEffect(() => {
-    if (locked || !accessKey) return;
+    const generation = {};
+    previewGeneration.current = generation;
+    attachmentTransport.current = fileTransport;
+    loadingAttachments.current.forEach((controller) => controller.abort());
+    loadingAttachments.current.clear();
+    failedAttachments.current.clear();
+    // Keep draft blob URLs and thumbnails; only signed remote URLs are invalidated.
+    setAttachmentUrls((current) => localAttachmentUrls(current));
+    return () => {
+      previewGeneration.current = null;
+      loadingAttachments.current.forEach((controller) => controller.abort());
+      loadingAttachments.current.clear();
+    };
+  }, [fileTransport, accessKey, locked]);
 
-    const allAttachments = [
-      ...items.flatMap((item) => item.attachments),
+  useEffect(() => {
+    if (locked || !accessKey || !fileTransport) return;
+    const generation = previewGeneration.current;
+    const allAttachments = new Map([
+      ...items.flatMap((item) => item.attachments || []),
       ...editAttachments,
-    ];
+    ].map((attachment) => [attachment.id, attachment]));
 
-    const missing = allAttachments.filter((attachment) => (
+    const missing = [...allAttachments.values()].filter((attachment) => (
       attachment.kind === "image"
       && attachment.key
       && !attachmentUrls[attachment.id]
       && !loadingAttachments.current.has(attachment.id)
       && !failedAttachments.current.has(attachment.id)
-    ));
+    )).slice(0, Math.max(0, 4 - loadingAttachments.current.size));
 
-    if (!missing.length) return;
-
-    missing.forEach((att) => loadingAttachments.current.add(att.id));
-
-    let cancelled = false;
-
-    async function fetchWithConcurrency(itemsToFetch, limit, worker) {
-      const executing = new Set();
-      for (const itemToFetch of itemsToFetch) {
-        if (cancelled) break;
-        const p = Promise.resolve().then(() => worker(itemToFetch));
-        executing.add(p);
-        const clean = () => executing.delete(p);
-        p.then(clean, clean);
-        if (executing.size >= limit) {
-          await Promise.race(executing);
-        }
-      }
-      await Promise.all(executing);
-    }
-
-    void fetchWithConcurrency(missing, 4, async (attachment) => {
-      try {
-        const url = await loadAttachment(attachment);
-        if (!cancelled && url) {
-          setAttachmentUrls((current) => ({
-            ...current,
-            [attachment.id]: url,
-          }));
-        }
-      } catch {
-        failedAttachments.current.add(attachment.id);
-      } finally {
-        loadingAttachments.current.delete(attachment.id);
-      }
+    missing.forEach((attachment) => {
+      const controller = new AbortController();
+      loadingAttachments.current.set(attachment.id, controller);
+      const isCurrent = () => !controller.signal.aborted
+        && previewGeneration.current === generation
+        && getFileTransportState() === fileTransport;
+      void loadAttachment(attachment, controller.signal, isCurrent, fileTransport.transport)
+        .then((url) => {
+          if (url && isCurrent()) {
+            setAttachmentUrls((current) => isCurrent() ? { ...current, [attachment.id]: url } : current);
+          }
+        })
+        .catch(() => {
+          if (isCurrent()) failedAttachments.current.add(attachment.id);
+        })
+        .finally(() => {
+          if (loadingAttachments.current.get(attachment.id) === controller) {
+            loadingAttachments.current.delete(attachment.id);
+            setPreviewTick((current) => current + 1);
+          }
+        });
     });
-
-    return () => { cancelled = true; };
-  }, [items, editAttachments, accessKey, locked]);
+  }, [items, editAttachments, attachmentUrls, accessKey, locked, fileTransport, previewTick]);
 
   async function unlock(event) {
     event.preventDefault();
     const key = accessInput.trim();
     if (!key) return;
     setAccessKey(key);
-    localStorage.setItem(ACCESS_KEY_STORAGE, key);
+    try { localStorage.setItem(ACCESS_KEY_STORAGE, key); } catch {}
     await loadItems(key);
   }
 
 
   async function uploadSelectedFilesForNote(noteId, attachments, signal) {
+    const groupController = new AbortController();
+    const onAbort = () => groupController.abort();
+    if (signal?.aborted) groupController.abort();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    let firstError;
     const uploaded = [];
     const filesToUpload = attachments.filter((a) => a.file);
     const totalFiles = filesToUpload.length;
@@ -775,7 +799,7 @@ export default function Home() {
       setItems((current) => current.map((it) => (it.id === noteId ? {
         ...it,
         _uploadProgress: {
-          percent: totalBytes ? Math.min(100, Math.round(uploadedBytes / totalBytes * 100)) : 100,
+          percent: totalBytes ? Math.min(completedFiles === totalFiles ? 100 : 99, Math.round(uploadedBytes / totalBytes * 100)) : 100,
           current: Math.min(totalFiles, completedFiles + 1),
           total: totalFiles,
           name: activeFile?.file.name || filesToUpload.at(-1)?.file.name || "tệp tin",
@@ -785,11 +809,12 @@ export default function Home() {
 
     try {
       async function uploadOne(attachment) {
-        if (signal?.aborted) throw new Error("Upload đã bị hủy.");
+        if (groupController.signal.aborted) throw new Error("Upload đã bị hủy.");
         const storedAttachment = await uploadAttachment({
           file: attachment.file,
+          transport: getFileTransportState().transport,
           callApi,
-          signal,
+          signal: groupController.signal,
           onProgress: (percent) => {
             progressBySourceId.set(attachment.id, percent);
             reportProgress();
@@ -812,11 +837,19 @@ export default function Home() {
         });
       }
 
-      // Keep at most two attachment files active; each file uploads up to three R2 parts in parallel.
+      // Part PUTs share a separate two-slot queue across every upload in this tab.
       for (let index = 0; index < filesToUpload.length; index += 2) {
-        const results = await Promise.allSettled(filesToUpload.slice(index, index + 2).map(uploadOne));
+        const results = await Promise.allSettled(filesToUpload.slice(index, index + 2).map(async (attachment) => {
+          try {
+            await uploadOne(attachment);
+          } catch (error) {
+            firstError ??= error;
+            groupController.abort();
+            throw error;
+          }
+        }));
         const failed = results.find((result) => result.status === "rejected");
-        if (failed) throw failed.reason;
+        if (failed) throw firstError;
       }
       if (signal?.aborted) throw new Error("Upload đã bị hủy.");
       const completed = attachments.map((attachment) => (
@@ -829,6 +862,7 @@ export default function Home() {
       )));
       throw error;
     } finally {
+      signal?.removeEventListener("abort", onAbort);
       setItems((current) => current.map((it) => (it.id === noteId ? {
         ...it,
         _uploadProgress: null,
@@ -1366,7 +1400,7 @@ export default function Home() {
   function lock() {
     syncAbortControllers.current.forEach((controller) => controller.abort());
     syncAbortControllers.current.clear();
-    localStorage.removeItem(ACCESS_KEY_STORAGE);
+    try { localStorage.removeItem(ACCESS_KEY_STORAGE); } catch {}
     clearAttachmentUrls();
     setAccessKey("");
     setAccessInput("");
@@ -1415,6 +1449,7 @@ export default function Home() {
         </div>
 
         <div className="header-actions">
+          <FileTransportSwitch />
           <button className="btn btn-ghost btn-sm" type="button" onClick={lock} title="Lock and exit">
             <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
               <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
@@ -1483,7 +1518,7 @@ export default function Home() {
               saving={saving}
               onStartEdit={startEdit}
               onDelete={deleteItem}
-              attachmentUrls={attachmentUrls}
+              attachmentUrls={visibleAttachmentUrls}
               downloadingAttachments={downloadingAttachments}
               onDownloadAttachment={downloadAttachment}
               spaceId={currentSpaceId}
@@ -1513,7 +1548,7 @@ export default function Home() {
           onRemovePending={editingItem ? removeEditAttachment : removePending}
           onAddItem={editingItem ? saveEdit : addItem}
           onSelectInlineImages={(files) => addInlineImages(files, editingItem ? "edit" : "new")}
-          attachmentUrls={attachmentUrls}
+          attachmentUrls={visibleAttachmentUrls}
           saving={saving}
           onSelectFiles={(files) => handleAddFiles(files, editingItem ? "edit" : "new")}
           notice={notice}

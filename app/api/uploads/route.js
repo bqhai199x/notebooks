@@ -1,17 +1,17 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { accessIsConfigured, getAccessSpace, hasAccess } from "../../../lib/access";
+import { parseFileTransport } from "../../../lib/file-transport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const DEFAULT_MAX_UPLOAD_BYTES = 1024 * 1024 * 1024;
-const ABSOLUTE_MAX_UPLOAD_BYTES = 5 * 1024 * 1024 * 1024 * 1024;
 
 function maxUploadBytes() {
   const configured = Number(process.env.MAX_UPLOAD_BYTES);
   return Number.isSafeInteger(configured) && configured > 0
-    ? Math.min(configured, ABSOLUTE_MAX_UPLOAD_BYTES)
+    ? Math.min(configured, DEFAULT_MAX_UPLOAD_BYTES)
     : DEFAULT_MAX_UPLOAD_BYTES;
 }
 
@@ -53,6 +53,7 @@ export async function POST(request) {
   if (!body || typeof body !== "object" || Array.isArray(body)) return response({ error: "Invalid upload request." }, 400);
 
   try {
+    const transport = parseFileTransport(body.transport);
     const spaceId = getAccessSpace(request);
     const storage = await import("../../../lib/r2-notes");
     if (storage.storageIsReadOnly()) return readOnlyResponse();
@@ -67,6 +68,7 @@ export async function POST(request) {
         contentType: typeof body.contentType === "string" ? body.contentType : "",
         size,
         spaceId,
+        transport,
       });
       return response(result, 201);
     }
@@ -95,8 +97,9 @@ export async function POST(request) {
 
     return response({ error: "Unknown upload action." }, 400);
   } catch (error) {
-    console.error("Upload error:", error);
     const status = error?.status || error?.$metadata?.httpStatusCode;
+    if (status === 400) return response({ error: error.message }, 400);
+    console.error("Upload error:", { status, name: error?.name });
     return response({ error: status === 404 ? error.message : "Upload setup failed. Try again." }, status === 404 ? 404 : 500);
   }
 }
@@ -114,7 +117,7 @@ export async function DELETE(request) {
     await storage.deleteUnreferencedAttachments([key], spaceId);
     return response({ success: true });
   } catch (error) {
-    console.error("Upload cleanup error:", error);
+    console.error("Upload cleanup error:", { status: error?.$metadata?.httpStatusCode, name: error?.name });
     return response({ error: "Could not remove file." }, 500);
   }
 }

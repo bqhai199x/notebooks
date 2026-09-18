@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { parseFileTransport } from "../../../../lib/file-transport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -33,6 +34,7 @@ async function findSharedItem(id, requestedSpace) {
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
+    const transport = parseFileTransport(searchParams.get("transport") ?? undefined);
     const key = searchParams.get("key");
     const id = searchParams.get("id");
     const token = searchParams.get("token");
@@ -56,14 +58,16 @@ export async function GET(request) {
       contentType: meta.mimeType || attachment.contentType,
       download: isDownload,
       spaceId,
+      transport,
     });
     if (format === "json") {
       return response({ url, expiresAt: new Date(Date.now() + 5 * 60 * 1000).toISOString() });
     }
-    return NextResponse.redirect(url, { status: 302, headers: { "Cache-Control": "no-store" } });
+    return NextResponse.redirect(new URL(url, request.url), { status: 302, headers: { "Cache-Control": "no-store" } });
   } catch (error) {
-    console.error("Share files GET error:", error);
     const status = error?.$metadata?.httpStatusCode || error?.status;
+    if (status === 400) return response({ error: error.message }, 400);
+    console.error("Share files GET error:", { status, name: error?.name });
     return response({ error: status === 404 ? "Không tìm thấy tệp tin." : "Không thể tải tệp tin." }, status === 404 ? 404 : 500);
   }
 }
