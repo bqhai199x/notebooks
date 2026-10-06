@@ -5,7 +5,9 @@ import UnlockCard from "./components/UnlockCard";
 import ItemCard from "./components/ItemCard";
 import ItemComposer from "./components/ItemComposer";
 import PullToRefreshIndicator from "./components/PullToRefreshIndicator";
-import FileTransportSwitch from "./components/FileTransportSwitch";
+import HeaderActions from "./components/HeaderActions";
+import CategoryTabs from "./components/CategoryTabs";
+import { DEFAULT_CATEGORY_ID, DEFAULT_CATEGORY_NAME } from "../lib/notes-data";
 import { getFileTransportState, useFileTransport } from "../lib/use-file-transport";
 import { uploadAttachment } from "../lib/upload-attachment";
 import {
@@ -85,19 +87,201 @@ async function createThumbnail(file, maxDim = 120, quality = 0.65) {
   }
 }
 
+async function createVideoThumbnail(file, maxDim = 320, quality = 0.75) {
+  if (!file || typeof window === "undefined" || !file.type?.startsWith("video/")) return null;
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+
+      const url = URL.createObjectURL(file);
+      video.src = url;
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (!cleaned) {
+          cleaned = true;
+          URL.revokeObjectURL(url);
+          video.remove();
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, 5000);
+
+      video.onloadeddata = () => {
+        video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+      };
+
+      video.onseeked = () => {
+        try {
+          let { videoWidth: width, videoHeight: height } = video;
+          if (!width || !height) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve(null);
+            return;
+          }
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve(null);
+            return;
+          }
+          ctx.drawImage(video, 0, 0, width, height);
+          clearTimeout(timeout);
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          const duration = video.duration && Number.isFinite(video.duration) ? Math.round(video.duration) : null;
+          cleanup();
+          resolve({ thumbnail: dataUrl, duration });
+        } catch {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(null);
+        }
+      };
+
+      video.onerror = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+async function createVideoThumbnailFromUrl(url, maxDim = 320, quality = 0.75) {
+  if (!url || typeof window === "undefined") return null;
+  return new Promise((resolve) => {
+    try {
+      const video = document.createElement("video");
+      video.preload = "metadata";
+      video.muted = true;
+      video.playsInline = true;
+      video.crossOrigin = "anonymous";
+      video.src = url;
+
+      let cleaned = false;
+      const cleanup = () => {
+        if (!cleaned) {
+          cleaned = true;
+          video.pause();
+          video.removeAttribute("src");
+          video.load();
+          video.remove();
+        }
+      };
+
+      const timeout = setTimeout(() => {
+        cleanup();
+        resolve(null);
+      }, 10000);
+
+      video.onloadeddata = () => {
+        try {
+          video.currentTime = Math.min(0.5, (video.duration || 1) / 2);
+        } catch {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(null);
+        }
+      };
+
+      video.onseeked = () => {
+        try {
+          let { videoWidth: width, videoHeight: height } = video;
+          if (!width || !height) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve(null);
+            return;
+          }
+          if (width > maxDim || height > maxDim) {
+            if (width > height) {
+              height = Math.round((height * maxDim) / width);
+              width = maxDim;
+            } else {
+              width = Math.round((width * maxDim) / height);
+              height = maxDim;
+            }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(1, width);
+          canvas.height = Math.max(1, height);
+          const ctx = canvas.getContext("2d");
+          if (!ctx) {
+            clearTimeout(timeout);
+            cleanup();
+            resolve(null);
+            return;
+          }
+          ctx.drawImage(video, 0, 0, width, height);
+          clearTimeout(timeout);
+          const dataUrl = canvas.toDataURL("image/jpeg", quality);
+          const duration = video.duration && Number.isFinite(video.duration) ? Math.round(video.duration) : null;
+          cleanup();
+          resolve({ thumbnail: dataUrl, duration });
+        } catch {
+          clearTimeout(timeout);
+          cleanup();
+          resolve(null);
+        }
+      };
+
+      video.onerror = () => {
+        clearTimeout(timeout);
+        cleanup();
+        resolve(null);
+      };
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
 function selectedFileAttachment(file, inline = false) {
+  const isImg = file.type?.startsWith("image/");
+  const isVid = file.type?.startsWith("video/");
   const attachment = {
     id: makeId(),
-    kind: file.type?.startsWith("image/") ? "image" : "file",
-    name: file.name || "file",
-    contentType: file.type,
+    kind: isImg ? "image" : (isVid ? "video" : "file"),
+    name: file.name || (isVid ? "video.mp4" : "file"),
+    contentType: file.type || (isVid ? "video/mp4" : "application/octet-stream"),
     size: file.size,
     file,
     ...(inline ? { _inline: true } : {}),
   };
-  if (file.type?.startsWith("image/")) {
+  if (isImg) {
     void createThumbnail(file).then((thumb) => {
       if (thumb) attachment.thumbnail = thumb;
+    });
+  } else if (isVid) {
+    void createVideoThumbnail(file).then((res) => {
+      if (res?.thumbnail) {
+        attachment.thumbnail = res.thumbnail;
+        if (res.duration) attachment.duration = res.duration;
+      } else if (typeof res === "string") {
+        attachment.thumbnail = res;
+      }
     });
   }
   return attachment;
@@ -115,6 +299,10 @@ function localAttachmentUrls(urls) {
 export default function Home() {
   const fileTransport = useFileTransport();
   const [items, setItems] = useState([]);
+  const [categories, setCategories] = useState(() => [
+    { id: DEFAULT_CATEGORY_ID, name: DEFAULT_CATEGORY_NAME, isDefault: true },
+  ]);
+  const [activeTabId, setActiveTabId] = useState(DEFAULT_CATEGORY_ID);
   const [accessKey, setAccessKey] = useState("");
   const [accessInput, setAccessInput] = useState("");
   const [locked, setLocked] = useState(true);
@@ -205,6 +393,34 @@ export default function Home() {
     () => items.find((item) => item.id === editingId) ?? null,
     [items, editingId],
   );
+
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("notes-active-tab");
+      if (saved) setActiveTabId(saved);
+    } catch {}
+  }, []);
+
+  const selectActiveTab = (tabId) => {
+    setActiveTabId(tabId);
+    try {
+      localStorage.setItem("notes-active-tab", tabId);
+    } catch {}
+  };
+
+  const categoryItemCounts = useMemo(() => {
+    const counts = {};
+    categories.forEach((cat) => { counts[cat.id] = 0; });
+    items.forEach((item) => {
+      const catId = item.categoryId || DEFAULT_CATEGORY_ID;
+      counts[catId] = (counts[catId] || 0) + 1;
+    });
+    return counts;
+  }, [categories, items]);
+
+  const visibleItems = useMemo(() => {
+    return items.filter((item) => (item.categoryId || DEFAULT_CATEGORY_ID) === activeTabId);
+  }, [items, activeTabId]);
 
   function revokeUrl(url) {
     if (!url || !objectUrls.current.has(url)) return;
@@ -414,6 +630,14 @@ export default function Home() {
       ];
       itemsRef.current = nextItems;
       setItems(nextItems);
+
+      if (Array.isArray(data.categories) && data.categories.length > 0) {
+        setCategories(data.categories);
+        setActiveTabId((currentTab) => {
+          return data.categories.some((c) => c.id === currentTab) ? currentTab : data.categories[0].id;
+        });
+      }
+
       if (data.spaceId) {
         setCurrentSpaceId(data.spaceId);
       }
@@ -425,7 +649,183 @@ export default function Home() {
     }
   }
 
-  async function persistItemOrder(itemId, orderedIds) {
+  const handleSelectTab = (tabId) => {
+    setActiveTabId(tabId);
+    try {
+      localStorage.setItem("notes-active-tab", tabId);
+    } catch {}
+  };
+
+  const handleAddCategory = async (name) => {
+    if (!name?.trim()) return;
+    const newId = `tab-${Date.now()}`;
+    const newCat = { id: newId, name: name.trim() };
+    const nextCategories = [...categories, newCat];
+    setCategories(nextCategories);
+    handleSelectTab(newId);
+    try {
+      await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "save-categories",
+          categories: nextCategories,
+        }),
+      });
+    } catch (err) {
+      setNotice("Không thể tạo danh mục: " + err.message);
+    }
+  };
+
+  const handleRenameCategory = async (catId, newName) => {
+    if (!newName?.trim()) return;
+    const nextCategories = categories.map((c) => (c.id === catId ? { ...c, name: newName.trim() } : c));
+    setCategories(nextCategories);
+    try {
+      await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "save-categories",
+          categories: nextCategories,
+        }),
+      });
+    } catch (err) {
+      setNotice("Không thể đổi tên danh mục: " + err.message);
+    }
+  };
+
+  const handleDeleteCategory = async (catId, deleteNotes = false) => {
+    if (catId === DEFAULT_CATEGORY_ID) return;
+    const catToDelete = categories.find((c) => c.id === catId);
+    try {
+      const data = await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "delete-category",
+          categoryId: catId,
+          deleteNotes: Boolean(deleteNotes),
+        }),
+      });
+      if (Array.isArray(data.categories)) {
+        setCategories(data.categories);
+      } else {
+        setCategories((prev) => prev.filter((c) => c.id !== catId));
+      }
+      if (Array.isArray(data.items)) {
+        setItems(data.items);
+        itemsRef.current = data.items;
+      } else {
+        if (deleteNotes) {
+          setItems((prev) => prev.filter((it) => it.categoryId !== catId));
+        } else {
+          setItems((prev) => prev.map((it) => (it.categoryId === catId ? { ...it, categoryId: DEFAULT_CATEGORY_ID } : it)));
+        }
+      }
+      handleSelectTab(DEFAULT_CATEGORY_ID);
+      const rootName = categories[0]?.name || DEFAULT_CATEGORY_NAME;
+      if (deleteNotes) {
+        setNotice(`Đã xoá danh mục "${catToDelete?.name || ""}" và tất cả ghi chú.`);
+      } else {
+        setNotice(`Đã xoá danh mục "${catToDelete?.name || ""}" và chuyển ghi chú về "${rootName}".`);
+      }
+    } catch (err) {
+      setNotice("Không thể xoá danh mục: " + err.message);
+    }
+  };
+
+  const handleReorderCategories = async (newCategories) => {
+    setCategories(newCategories);
+    try {
+      await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "save-categories",
+          categories: newCategories,
+        }),
+      });
+    } catch (err) {
+      setNotice("Không thể lưu thứ tự danh mục: " + err.message);
+    }
+  };
+
+  const moveItemToCategory = async (itemId, targetCategoryId) => {
+    const targetCat = categories.find((c) => c.id === targetCategoryId);
+    const targetCatName = targetCat ? targetCat.name : "danh mục mới";
+    setItems((current) => current.map((it) => (it.id === itemId ? { ...it, categoryId: targetCategoryId } : it)));
+    itemsRef.current = itemsRef.current.map((it) => (it.id === itemId ? { ...it, categoryId: targetCategoryId } : it));
+    setNotice(`Đã chuyển ghi chú sang mục ${targetCatName}.`);
+
+    try {
+      await callApi("/api/items", {
+        method: "PATCH",
+        body: JSON.stringify({
+          action: "move-category",
+          id: itemId,
+          categoryId: targetCategoryId,
+        }),
+      });
+    } catch (err) {
+      setNotice("Không thể chuyển danh mục: " + err.message);
+      void loadItems(accessKey);
+    }
+  };
+
+  async function playVideo(attachment) {
+    let url = attachmentUrls[attachment.id];
+    if (!url) {
+      const query = new URLSearchParams({
+        key: attachment.key,
+        name: attachment.name || "video.mp4",
+        format: "json",
+        transport: getFileTransportState().transport,
+      });
+      const response = await fetch(`/api/files?${query.toString()}`, {
+        headers: { "x-notes-access-key": accessKey },
+      });
+      if (!response.ok) throw new Error("Could not load video.");
+      const data = await response.json();
+      url = data.url;
+      setAttachmentUrls((prev) => ({ ...prev, [attachment.id]: url }));
+    }
+
+    if (!attachment.thumbnail && url) {
+      void createVideoThumbnailFromUrl(url).then(async (result) => {
+        const thumb = result?.thumbnail || (typeof result === "string" ? result : null);
+        const duration = result?.duration;
+        if (!thumb) return;
+        attachment.thumbnail = thumb;
+        if (duration) attachment.duration = duration;
+        setItems((current) => current.map((it) => {
+          if (!it.attachments?.some((a) => a.id === attachment.id)) return it;
+          return {
+            ...it,
+            attachments: it.attachments.map((a) => (a.id === attachment.id ? { ...a, thumbnail: thumb, ...(duration ? { duration } : {}) } : a)),
+          };
+        }));
+        try {
+          const parentItem = itemsRef.current.find((it) => it.attachments?.some((a) => a.id === attachment.id));
+          if (parentItem) {
+            const updatedAttachments = parentItem.attachments.map((a) => (
+              a.id === attachment.id ? { ...a, thumbnail: thumb, ...(duration ? { duration } : {}) } : a
+            ));
+            await callApi("/api/items", {
+              method: "PATCH",
+              body: JSON.stringify({
+                action: "edit-item",
+                id: parentItem.id,
+                content: parentItem.content,
+                contentFormat: parentItem.contentFormat,
+                attachments: updatedAttachments.map(persistedAttachment),
+              }),
+            });
+          }
+        } catch {}
+      });
+    }
+
+    return url;
+  }
+
+  async function persistItemOrder(itemId, orderedIdsInTab) {
     if (
       savingRef.current
       || isEditingRef.current
@@ -433,10 +833,22 @@ export default function Home() {
     ) return;
 
     const previousItems = itemsRef.current;
-    const nextItems = itemsInOrder(previousItems, orderedIds);
-    if (!nextItems.some((item) => item.id === itemId) || sameItemOrder(previousItems, nextItems)) {
-      return;
-    }
+    const tabItemsMap = new Map(
+      previousItems
+        .filter((it) => (it.categoryId || DEFAULT_CATEGORY_ID) === activeTabId)
+        .map((it) => [it.id, it])
+    );
+    const reorderedTabItems = orderedIdsInTab.map((id) => tabItemsMap.get(id)).filter(Boolean);
+
+    let tabIndex = 0;
+    const nextItems = previousItems.map((item) => {
+      if ((item.categoryId || DEFAULT_CATEGORY_ID) === activeTabId) {
+        return reorderedTabItems[tabIndex++] || item;
+      }
+      return item;
+    });
+
+    if (sameItemOrder(previousItems, nextItems)) return;
 
     const movedItemIndex = nextItems.findIndex((item) => item.id === itemId);
     const beforeId = nextItems[movedItemIndex + 1]?.id ?? null;
@@ -469,7 +881,7 @@ export default function Home() {
     if (
       !container
       || locked
-      || items.length < 2
+      || visibleItems.length < 1
       || editingId
       || saving
       || reordering
@@ -485,6 +897,39 @@ export default function Home() {
       if (disposed) return;
 
       const Sortable = module.default;
+      let lastClientX = 0;
+      let lastClientY = 0;
+      let currentDragOverTabEl = null;
+
+      const updateDragTarget = (x, y) => {
+        if (!x && !y) return;
+        lastClientX = x;
+        lastClientY = y;
+        const targetTab = document.elementFromPoint(x, y)?.closest("[data-tab-id]");
+        const tabId = targetTab?.dataset?.tabId;
+        const validTabEl = (tabId && tabId !== activeTabId) ? targetTab : null;
+
+        if (validTabEl !== currentDragOverTabEl) {
+          if (currentDragOverTabEl) {
+            currentDragOverTabEl.classList.remove("is-drag-over");
+          }
+          if (validTabEl) {
+            validTabEl.classList.add("is-drag-over");
+          }
+          currentDragOverTabEl = validTabEl;
+        }
+      };
+
+      const handlePointerMove = (e) => {
+        updateDragTarget(e.clientX, e.clientY);
+      };
+
+      const handleTouchMove = (e) => {
+        if (e.touches?.[0]) {
+          updateDragTarget(e.touches[0].clientX, e.touches[0].clientY);
+        }
+      };
+
       sortable = new Sortable(container, {
         animation: 150,
         draggable: ".item-card[data-item-id]",
@@ -492,12 +937,54 @@ export default function Home() {
         ghostClass: "item-card-sortable-ghost",
         chosenClass: "item-card-sortable-chosen",
         dragClass: "item-card-sortable-drag",
+        fallbackClass: "item-card-sortable-fallback",
+        forceFallback: true,
+        fallbackOnBody: true,
         delay: 120,
         delayOnTouchOnly: true,
         touchStartThreshold: 4,
-        fallbackOnBody: true,
+        onStart() {
+          document.body.classList.add("is-dragging-item");
+          window.addEventListener("pointermove", handlePointerMove);
+          window.addEventListener("touchmove", handleTouchMove, { passive: true });
+        },
+        onMove(evt, originalEvent) {
+          if (originalEvent) {
+            const x = originalEvent.clientX ?? originalEvent.touches?.[0]?.clientX ?? 0;
+            const y = originalEvent.clientY ?? originalEvent.touches?.[0]?.clientY ?? 0;
+            updateDragTarget(x, y);
+          }
+          // Prevent swapping notes in list if dragging over header tabs
+          if (currentDragOverTabEl) {
+            return false;
+          }
+        },
         onEnd(event) {
+          document.body.classList.remove("is-dragging-item");
+          window.removeEventListener("pointermove", handlePointerMove);
+          window.removeEventListener("touchmove", handleTouchMove);
+          if (currentDragOverTabEl) {
+            currentDragOverTabEl.classList.remove("is-drag-over");
+            currentDragOverTabEl = null;
+          }
+
           const itemId = event.item?.dataset.itemId;
+          if (!itemId) return;
+
+          // Check if dropped onto a tab
+          const orig = event.originalEvent;
+          const x = orig?.clientX ?? orig?.changedTouches?.[0]?.clientX ?? lastClientX;
+          const y = orig?.clientY ?? orig?.changedTouches?.[0]?.clientY ?? lastClientY;
+          const dropTarget = document.elementFromPoint(x, y)?.closest("[data-tab-id]");
+          const targetTabId = dropTarget?.dataset?.tabId;
+          if (targetTabId && targetTabId !== activeTabId) {
+            setTimeout(() => {
+              void moveItemToCategory(itemId, targetTabId);
+            }, 50);
+            return;
+          }
+
+          if (visibleItems.length < 2) return;
           const orderedIds = Array.from(container.querySelectorAll(".item-card[data-item-id]"))
             .map((element) => element.dataset.itemId)
             .filter(Boolean);
@@ -511,7 +998,7 @@ export default function Home() {
       disposed = true;
       sortable?.destroy();
     };
-  }, [locked, items.length, editingId, saving, reordering]);
+  }, [locked, visibleItems.length, activeTabId, editingId, saving, reordering]);
 
   useEffect(() => {
     const container = itemsListRef.current;
@@ -636,6 +1123,44 @@ export default function Home() {
         .catch(() => {});
     }
 
+    if (!attachment.thumbnail && (attachment.contentType?.startsWith("video/") || attachment.kind === "video")) {
+      void createVideoThumbnailFromUrl(url)
+        .then(async (result) => {
+          const thumb = result?.thumbnail || (typeof result === "string" ? result : null);
+          const duration = result?.duration;
+          if (!thumb || !isCurrent()) return;
+          attachment.thumbnail = thumb;
+          if (duration) attachment.duration = duration;
+          setItems((current) => !isCurrent() ? current : current.map((it) => {
+            if (!it.attachments?.some((a) => a.id === attachment.id)) return it;
+            return {
+              ...it,
+              attachments: it.attachments.map((a) => a.id === attachment.id ? { ...a, thumbnail: thumb, ...(duration ? { duration } : {}) } : a),
+            };
+          }));
+
+          try {
+            const parentItem = itemsRef.current.find((it) => it.attachments?.some((a) => a.id === attachment.id));
+            if (parentItem) {
+              const updatedAttachments = parentItem.attachments.map((a) => (
+                a.id === attachment.id ? { ...a, thumbnail: thumb, ...(duration ? { duration } : {}) } : a
+              ));
+              await callApi("/api/items", {
+                method: "PATCH",
+                body: JSON.stringify({
+                  action: "edit-item",
+                  id: parentItem.id,
+                  content: parentItem.content,
+                  contentFormat: parentItem.contentFormat,
+                  attachments: updatedAttachments.map(persistedAttachment),
+                }),
+              });
+            }
+          } catch {}
+        })
+        .catch(() => {});
+    }
+
     return url;
   }
 
@@ -736,9 +1261,9 @@ export default function Home() {
     ].map((attachment) => [attachment.id, attachment]));
 
     const missing = [...allAttachments.values()].filter((attachment) => (
-      attachment.kind === "image"
+      ((attachment.kind === "image" && !attachmentUrls[attachment.id])
+       || ((attachment.kind === "video" || attachment.contentType?.startsWith("video/")) && !attachment.thumbnail && !attachmentUrls[attachment.id]))
       && attachment.key
-      && !attachmentUrls[attachment.id]
       && !loadingAttachments.current.has(attachment.id)
       && !failedAttachments.current.has(attachment.id)
     )).slice(0, Math.max(0, 4 - loadingAttachments.current.size));
@@ -876,7 +1401,7 @@ export default function Home() {
     )));
   }
 
-  async function runSyncNewItem(optimisticId, noteDraft, notePending) {
+  async function runSyncNewItem(optimisticId, noteDraft, notePending, targetCategoryId = null) {
     const abortController = new AbortController();
     syncAbortControllers.current.set(optimisticId, abortController);
     let uploaded = [];
@@ -900,6 +1425,7 @@ export default function Home() {
       const data = await callApi("/api/items", {
         method: "POST",
         body: JSON.stringify({
+          categoryId: targetCategoryId || activeTabId || DEFAULT_CATEGORY_ID,
           content: serializeQuillDelta(savedContent),
           contentFormat: QUILL_DELTA_FORMAT,
           attachments: savedAttachments,
@@ -958,8 +1484,10 @@ export default function Home() {
     const currentDraft = draft;
     const currentPending = [...activeAttachments];
 
+    const targetCategoryId = activeTabId || DEFAULT_CATEGORY_ID;
     const optimisticItem = {
       id: optimisticId,
+      categoryId: targetCategoryId,
       content: serializeQuillDelta(currentDraft),
       contentFormat: QUILL_DELTA_FORMAT,
       attachments: currentPending.map((att) => ({
@@ -998,7 +1526,7 @@ export default function Home() {
     setNotice("");
 
     // Tiến hành đồng bộ ngầm
-    void runSyncNewItem(optimisticId, currentDraft, currentPending);
+    void runSyncNewItem(optimisticId, currentDraft, currentPending, targetCategoryId);
   }
 
   function startEdit(item) {
@@ -1436,28 +1964,20 @@ export default function Home() {
   return (
     <main className="app-shell">
       <header className="app-header">
-        <div className="app-brand">
-          <div className="brand-icon-box" aria-hidden="true">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
-              <path d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5a2.5 2.5 0 0 1-2.5-2.5Z" />
-              <path d="M6 6h10" />
-              <path d="M6 10h10" />
-            </svg>
-          </div>
-          <h1 className="brand-title">Notes</h1>
-          <span className="brand-badge">{items.length}</span>
-        </div>
+        <CategoryTabs
+          categories={categories}
+          activeTabId={activeTabId}
+          onSelectTab={handleSelectTab}
+          itemCounts={categoryItemCounts}
+          onAddCategory={handleAddCategory}
+          onRenameCategory={handleRenameCategory}
+          onDeleteCategory={handleDeleteCategory}
+          onReorderCategories={handleReorderCategories}
+        />
 
-        <div className="header-actions">
-          <FileTransportSwitch />
-          <button className="btn btn-ghost btn-sm" type="button" onClick={lock} title="Lock and exit">
-            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-              <rect width="18" height="11" x="3" y="11" rx="2" ry="2" />
-              <path d="M7 11V7a5 5 0 0 1 10 0v4" />
-            </svg>
-            <span>Lock</span>
-          </button>
-        </div>
+        <div className="header-actions-divider" aria-hidden="true" />
+
+        <HeaderActions onLock={lock} />
       </header>
 
       <section className="notes-surface">
@@ -1492,7 +2012,7 @@ export default function Home() {
             </div>
           )}
 
-          {!loading && items.length === 0 && (
+          {!loading && visibleItems.length === 0 && (
             <div className="empty-items">
               <div className="empty-icon-wrap" aria-hidden="true">
                 <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
@@ -1502,12 +2022,12 @@ export default function Home() {
                   <line x1="9" y1="15" x2="15" y2="15" />
                 </svg>
               </div>
-              <h2>No notes yet</h2>
-              <p>Start writing notes, attaching files or pasting images using the composer below.</p>
+              <h2>Chưa có ghi chú nào</h2>
+              <p>Chưa có ghi chú nào trong mục &ldquo;{categories.find((c) => c.id === activeTabId)?.name || categories[0]?.name || DEFAULT_CATEGORY_NAME}&rdquo;. Hãy viết ghi chú bên dưới.</p>
             </div>
           )}
 
-          {items.map((item, index) => (
+          {visibleItems.map((item, index) => (
             <ItemCard
               key={item.id}
               item={item}
@@ -1521,6 +2041,7 @@ export default function Home() {
               attachmentUrls={visibleAttachmentUrls}
               downloadingAttachments={downloadingAttachments}
               onDownloadAttachment={downloadAttachment}
+              onPlayVideo={playVideo}
               spaceId={currentSpaceId}
               onUpdateShare={updateItemShare}
               onCancelSync={cancelNoteSync}
@@ -1554,6 +2075,7 @@ export default function Home() {
           notice={notice}
           editingItem={editingItem}
           onCancelEdit={cancelEdit}
+          categoryName={categories.find((c) => c.id === activeTabId)?.name || categories[0]?.name || DEFAULT_CATEGORY_NAME}
         />
       </section>
     </main>

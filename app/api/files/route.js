@@ -5,8 +5,34 @@ import { parseFileTransport } from "../../../lib/file-transport";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+const isDev = process.env.NODE_ENV !== "production";
+
+function corsHeaders() {
+  if (!isDev) return {};
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-notes-access-key",
+  };
+}
+
 function response(data, status = 200) {
-  return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      ...corsHeaders(),
+    },
+  });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders(),
+    },
+  });
 }
 
 function authorize(request) {

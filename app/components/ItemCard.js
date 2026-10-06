@@ -25,6 +25,7 @@ export default function ItemCard({
   attachmentUrls,
   downloadingAttachments,
   onDownloadAttachment,
+  onPlayVideo,
   spaceId = "default",
   onUpdateShare,
   onCancelSync,
@@ -363,6 +364,7 @@ export default function ItemCard({
               attachmentUrls={attachmentUrls}
               downloadingAttachments={downloadingAttachments}
               onDownload={onDownloadAttachment}
+              onPlayVideo={onPlayVideo}
             />
           )}
         </div>

@@ -25,6 +25,25 @@ export default function AttachmentTypeIcon({ type, compact = false, filename = "
     );
   }
 
+  if (type === "video" || ["mp4", "webm", "mov", "mkv", "avi"].includes(ext)) {
+    return (
+      <svg
+        width={size}
+        height={size}
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="#6366f1"
+        strokeWidth="2"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        aria-hidden="true"
+      >
+        <rect width="18" height="18" x="3" y="3" rx="2" ry="2" />
+        <polygon points="10 8 16 12 10 16 10 8" fill="#6366f1" />
+      </svg>
+    );
+  }
+
   if (type === "image") {
     return (
       <svg

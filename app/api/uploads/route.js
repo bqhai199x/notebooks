@@ -20,8 +20,34 @@ function readableSize(bytes) {
   return `${Math.ceil(bytes / (1024 * 1024))} MB`;
 }
 
+const isDev = process.env.NODE_ENV !== "production";
+
+function corsHeaders() {
+  if (!isDev) return {};
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "POST, DELETE, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-notes-access-key",
+  };
+}
+
 function response(data, status = 200) {
-  return NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
+  return NextResponse.json(data, {
+    status,
+    headers: {
+      "Cache-Control": "no-store",
+      ...corsHeaders(),
+    },
+  });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders(),
+    },
+  });
 }
 
 function authorize(request) {
@@ -112,9 +138,18 @@ export async function DELETE(request) {
     const storage = await import("../../../lib/r2-notes");
     if (storage.storageIsReadOnly()) return readOnlyResponse();
     const spaceId = getAccessSpace(request);
-    const key = new URL(request.url).searchParams.get("key");
-    if (!key || !storage.attachmentKeyBelongsToSpace(key, spaceId)) return response({ error: "Missing or invalid file." }, 400);
-    await storage.deleteUnreferencedAttachments([key], spaceId);
+    const searchParams = new URL(request.url).searchParams;
+    const key = searchParams.get("key");
+    const sessionId = searchParams.get("sessionId");
+
+    if (sessionId) {
+      await storage.abortAttachmentUpload({ sessionId, spaceId }).catch(() => {});
+    }
+
+    if (key && storage.attachmentKeyBelongsToSpace(key, spaceId)) {
+      await storage.deleteUnreferencedAttachments([key], spaceId);
+    }
+
     return response({ success: true });
   } catch (error) {
     console.error("Upload cleanup error:", { status: error?.$metadata?.httpStatusCode, name: error?.name });

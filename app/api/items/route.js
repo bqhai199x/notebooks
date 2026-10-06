@@ -6,16 +6,40 @@ import {
   prepareRichTextContent,
   richTextHasText,
 } from "../../../lib/rich-text";
+import { DEFAULT_CATEGORY_ID } from "../../../lib/notes-data";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const MAX_ATTACHMENTS = 10;
 
+const isDev = process.env.NODE_ENV !== "production";
+
+function corsHeaders() {
+  if (!isDev) return {};
+  return {
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, PATCH, OPTIONS",
+    "Access-Control-Allow-Headers": "Content-Type, Authorization, x-notes-access-key",
+  };
+}
+
 function response(data, status = 200) {
   return NextResponse.json(data, {
     status,
-    headers: { "Cache-Control": "no-store" },
+    headers: {
+      "Cache-Control": "no-store",
+      ...corsHeaders(),
+    },
+  });
+}
+
+export async function OPTIONS() {
+  return new NextResponse(null, {
+    status: 204,
+    headers: {
+      ...corsHeaders(),
+    },
   });
 }
 
@@ -43,14 +67,19 @@ function normalizeAttachment(value) {
     }
   }
 
-  if (!['image', 'file'].includes(value.kind) || typeof value.id !== "string" || typeof value.key !== "string" || !value.key.trim()) {
+  if (!['image', 'file', 'video'].includes(value.kind) || typeof value.id !== "string" || typeof value.key !== "string" || !value.key.trim()) {
     return null;
   }
 
   const contentType = typeof value.contentType === "string"
     ? value.contentType.slice(0, 160)
     : "application/octet-stream";
-  const kind = contentType.startsWith("image/") ? "image" : "file";
+  let kind = "file";
+  if (contentType.startsWith("image/") || value.kind === "image") {
+    kind = "image";
+  } else if (contentType.startsWith("video/") || value.kind === "video") {
+    kind = "video";
+  }
   if (value.kind !== kind) return null;
 
   return {
@@ -60,8 +89,8 @@ function normalizeAttachment(value) {
     name: typeof value.name === "string" ? value.name.slice(0, 180) : "Attachment",
     contentType,
     size: Number.isFinite(value.size) ? Math.max(0, value.size) : 0,
-    ...(typeof value.thumbnail === "string" && value.thumbnail.startsWith("data:image/")
-      ? { thumbnail: value.thumbnail.slice(0, 60_000) }
+    ...(typeof value.thumbnail === "string" && (value.thumbnail.startsWith("data:image/") || value.thumbnail.startsWith("data:video/"))
+      ? { thumbnail: value.thumbnail.slice(0, 80_000) }
       : {}),
   };
 }
@@ -135,11 +164,14 @@ const MAX_RETRIES = 3;
 async function modifyItemsWithRetry(mutator, spaceId = null) {
   const { getItemsWithMeta, saveItems } = await import("../../../lib/r2-notes");
   for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
-    const { items, eTag } = await getItemsWithMeta(spaceId);
-    const result = await mutator(items);
+    const { items, categories, eTag } = await getItemsWithMeta(spaceId);
+    const result = await mutator({ items, categories });
     if (!result || result.abort) return result;
     try {
-      await saveItems(result.nextItems, eTag ? { expectedETag: eTag } : {}, spaceId);
+      await saveItems({
+        items: result.nextItems,
+        categories: result.nextCategories ?? categories,
+      }, eTag ? { expectedETag: eTag } : {}, spaceId);
       return result;
     } catch (error) {
       const isPreconditionFailed = error?.name === "PreconditionFailed"
@@ -161,8 +193,9 @@ export async function GET(request) {
 
   try {
     const spaceId = getAccessSpace(request);
-    const { getItems } = await import("../../../lib/r2-notes");
-    return response({ items: await getItems(spaceId), spaceId: spaceId || "default" });
+    const { getItemsWithMeta } = await import("../../../lib/r2-notes");
+    const { items, categories } = await getItemsWithMeta(spaceId);
+    return response({ items, categories, spaceId: spaceId || "default" });
   } catch (error) {
     return errorResponse(error);
   }
@@ -185,8 +218,13 @@ export async function POST(request) {
     }
 
     const now = new Date().toISOString();
+    const categoryId = typeof input.categoryId === "string" && input.categoryId.trim()
+      ? input.categoryId.trim()
+      : DEFAULT_CATEGORY_ID;
+
     const item = {
       id: randomUUID(),
+      categoryId,
       content: prepared.content,
       contentFormat: prepared.contentFormat,
       attachments: itemAttachments,
@@ -194,9 +232,9 @@ export async function POST(request) {
       updatedAt: now,
     };
 
-    await modifyItemsWithRetry((items) => {
+    await modifyItemsWithRetry(({ items, categories }) => {
       items.unshift(item);
-      return { nextItems: items, item };
+      return { nextItems: items, nextCategories: categories, item };
     }, spaceId);
 
     return response({ item }, 201);
@@ -214,9 +252,88 @@ export async function PATCH(request) {
     if (storageIsReadOnly()) return response({ error: "Notes are temporarily read-only while storage maintenance is in progress." }, 503);
     const spaceId = getAccessSpace(request);
     const input = await body(request);
+    const validActions = [
+      "edit-item",
+      "delete-item",
+      "reorder-item",
+      "update-share",
+      "move-category",
+      "save-categories",
+      "delete-category",
+    ];
+    if (!validActions.includes(input.action)) {
+      return response({ error: "Invalid request." }, 400);
+    }
+
+    if (input.action === "save-categories") {
+      if (!Array.isArray(input.categories)) {
+        return response({ error: "Invalid categories." }, 400);
+      }
+      const { normalizeCategories } = await import("../../../lib/notes-data");
+      const nextCategories = normalizeCategories(input.categories);
+      await modifyItemsWithRetry(({ items }) => {
+        return { nextItems: items, nextCategories };
+      }, spaceId);
+      return response({ success: true, categories: nextCategories });
+    }
+
+    if (input.action === "delete-category") {
+      if (typeof input.categoryId !== "string" || input.categoryId === DEFAULT_CATEGORY_ID) {
+        return response({ error: "Cannot delete default category." }, 400);
+      }
+      const { normalizeCategories } = await import("../../../lib/notes-data");
+      const { deleteUnreferencedAttachments } = await import("../../../lib/r2-notes");
+      const deleteNotes = Boolean(input.deleteNotes);
+      let updatedItems = [];
+      let finalCategories = [];
+      let removedAttachmentKeys = [];
+
+      await modifyItemsWithRetry(({ items, categories }) => {
+        finalCategories = normalizeCategories(categories.filter((c) => c.id !== input.categoryId));
+        if (deleteNotes) {
+          const notesToDelete = items.filter((it) => it.categoryId === input.categoryId);
+          removedAttachmentKeys = notesToDelete.flatMap((it) => it.attachments?.map((att) => att.key).filter(Boolean) || []);
+          updatedItems = items.filter((it) => it.categoryId !== input.categoryId);
+        } else {
+          updatedItems = items.map((it) => {
+            if (it.categoryId === input.categoryId) {
+              return { ...it, categoryId: DEFAULT_CATEGORY_ID, updatedAt: new Date().toISOString() };
+            }
+            return it;
+          });
+        }
+        return { nextItems: updatedItems, nextCategories: finalCategories };
+      }, spaceId);
+
+      if (removedAttachmentKeys.length > 0) {
+        await deleteUnreferencedAttachments(removedAttachmentKeys, spaceId);
+      }
+
+      return response({ success: true, categories: finalCategories, items: updatedItems });
+    }
+
+    if (input.action === "move-category") {
+      if (typeof input.id !== "string" || typeof input.categoryId !== "string") {
+        return response({ error: "Invalid request." }, 400);
+      }
+      let movedItem = null;
+      const result = await modifyItemsWithRetry(({ items, categories }) => {
+        const index = items.findIndex((entry) => entry.id === input.id);
+        if (index === -1) return { abort: true, notFound: true };
+        movedItem = {
+          ...items[index],
+          categoryId: input.categoryId,
+          updatedAt: new Date().toISOString(),
+        };
+        items[index] = movedItem;
+        return { nextItems: items, nextCategories: categories, item: movedItem };
+      }, spaceId);
+      if (result?.notFound) return response({ error: "Item not found." }, 404);
+      return response({ item: movedItem });
+    }
+
     if (
-      !["edit-item", "delete-item", "reorder-item", "update-share"].includes(input.action)
-      || typeof input.id !== "string"
+      typeof input.id !== "string"
       || (input.action === "reorder-item" && input.beforeId != null && typeof input.beforeId !== "string")
       || (input.action === "reorder-item" && input.beforeId === input.id)
     ) {
@@ -227,7 +344,7 @@ export async function PATCH(request) {
     let removedAttachmentKeys = [];
     let updatedItem = null;
 
-    const result = await modifyItemsWithRetry(async (items) => {
+    const result = await modifyItemsWithRetry(async ({ items, categories }) => {
       const index = items.findIndex((entry) => entry.id === input.id);
       if (index === -1) {
         return { abort: true, notFound: true };
@@ -252,13 +369,13 @@ export async function PATCH(request) {
         };
         items[index] = item;
         updatedItem = item;
-        return { nextItems: items, item, isShareUpdate: true };
+        return { nextItems: items, nextCategories: categories, item, isShareUpdate: true };
       }
 
-      if (input.action === 'delete-item') {
+      if (input.action === "delete-item") {
         const deleted = items[index];
         removedAttachmentKeys = deleted.attachments.map((attachment) => attachment.key).filter(Boolean);
-        return { nextItems: items.filter((entry) => entry.id !== input.id), isDelete: true };
+        return { nextItems: items.filter((entry) => entry.id !== input.id), nextCategories: categories, isDelete: true };
       }
 
       if (input.action === "reorder-item") {
@@ -272,7 +389,7 @@ export async function PATCH(request) {
         }
 
         items.splice(destinationIndex, 0, item);
-        return { nextItems: items, isReorder: true, items };
+        return { nextItems: items, nextCategories: categories, isReorder: true, items };
       }
 
       const itemAttachments = Array.isArray(input.attachments)
@@ -286,6 +403,7 @@ export async function PATCH(request) {
 
       const item = {
         ...items[index],
+        ...(typeof input.categoryId === "string" ? { categoryId: input.categoryId } : {}),
         content: prepared.content,
         contentFormat: prepared.contentFormat,
         attachments: itemAttachments,
@@ -297,7 +415,7 @@ export async function PATCH(request) {
 
       items[index] = item;
       updatedItem = item;
-      return { nextItems: items, item };
+      return { nextItems: items, nextCategories: categories, item };
     }, spaceId);
 
     if (result?.notFound) return response({ error: "Item not found." }, 404);
