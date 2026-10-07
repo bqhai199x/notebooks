@@ -13,11 +13,16 @@ export default {
     "127.0.0.1",
   ],
   async rewrites() {
-    const { endpoint, bucket } = r2FileOrigin();
-    return [{
-      source: R2_FILE_PROXY_SOURCE,
-      destination: `${endpoint}/${bucket}/:spaceId/attachments/:attachmentId`,
-    }];
+    try {
+      const { endpoint, bucket } = r2FileOrigin();
+      return [{
+        source: R2_FILE_PROXY_SOURCE,
+        destination: `${endpoint}/${bucket}/:spaceId/attachments/:attachmentId`,
+      }];
+    } catch (err) {
+      console.warn(`[next.config.mjs] Warning: ${err.message}. Skipping R2 file proxy rewrite.`);
+      return [];
+    }
   },
   async headers() {
     const headersList = [
