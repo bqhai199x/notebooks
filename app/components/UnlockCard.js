@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export default function UnlockCard({
   accessInput,
@@ -10,6 +10,20 @@ export default function UnlockCard({
   notice,
 }) {
   const [showKey, setShowKey] = useState(false);
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    // Avoid auto-focusing on Smart TVs or mobile touch screens to prevent on-screen keyboard popup
+    try {
+      const isTV = /tv|smart-tv|googletv|appletv|android tv|crkey/i.test(navigator?.userAgent || "");
+      const isTouch = "ontouchstart" in window || (navigator?.maxTouchPoints || 0) > 0;
+      if (!isTV && !isTouch && inputRef.current) {
+        inputRef.current.focus();
+      }
+    } catch {
+      // ignore
+    }
+  }, []);
 
   return (
     <main className="unlock-page">
@@ -37,15 +51,20 @@ export default function UnlockCard({
               </svg>
             </span>
             <input
+              ref={inputRef}
               id="access-key"
               type={showKey ? "text" : "password"}
               autoComplete="current-password"
               value={accessInput}
               onChange={(event) => setAccessInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !loading) {
+                  unlock(event);
+                }
+              }}
               placeholder="Enter your key..."
               className="unlock-input"
               required
-              autoFocus
             />
             <button
               type="button"

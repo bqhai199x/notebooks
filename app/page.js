@@ -306,7 +306,7 @@ export default function Home() {
   const [accessKey, setAccessKey] = useState("");
   const [accessInput, setAccessInput] = useState("");
   const [locked, setLocked] = useState(true);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [reordering, setReordering] = useState(false);
   const [notice, setNotice] = useState("");
@@ -578,24 +578,36 @@ export default function Home() {
   }
 
   async function callApi(path, options = {}, key = accessKey) {
-    const response = await fetch(path, {
-      ...options,
-      headers: {
-        "x-notes-access-key": key,
-        "Content-Type": "application/json",
-        ...(options.headers || {}),
-      },
-    });
-    const payload = await response.json().catch(() => ({}));
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 12000);
+    try {
+      const response = await fetch(path, {
+        ...options,
+        signal: options.signal || controller.signal,
+        headers: {
+          "x-notes-access-key": key,
+          "Content-Type": "application/json",
+          ...(options.headers || {}),
+        },
+      });
+      clearTimeout(timeoutId);
+      const payload = await response.json().catch(() => ({}));
 
-    if (!response.ok) {
-      if (response.status === 401) {
-        try { localStorage.removeItem(ACCESS_KEY_STORAGE); } catch {}
-        setLocked(true);
+      if (!response.ok) {
+        if (response.status === 401) {
+          try { localStorage.removeItem(ACCESS_KEY_STORAGE); } catch {}
+          setLocked(true);
+        }
+        throw new Error(payload.error || "Something went wrong.");
       }
-      throw new Error(payload.error || "Something went wrong.");
+      return payload;
+    } catch (err) {
+      clearTimeout(timeoutId);
+      if (err.name === "AbortError") {
+        throw new Error("Không thể kết nối (quá thời gian chờ). Vui lòng thử lại.");
+      }
+      throw err;
     }
-    return payload;
   }
 
   function upsertItem(nextItem) {
@@ -1205,11 +1217,32 @@ export default function Home() {
   }
 
   useEffect(() => {
-    let savedKey;
-    try { savedKey = localStorage.getItem(ACCESS_KEY_STORAGE); } catch {}
+    let isMounted = true;
+    let savedKey = null;
+    try {
+      savedKey = localStorage.getItem(ACCESS_KEY_STORAGE);
+    } catch (e) {
+      console.warn("Could not read access key from storage:", e);
+    }
+
     if (savedKey) {
+      setLoading(true);
       setAccessKey(savedKey);
-      loadItems(savedKey);
+
+      // Safety timeout: In case Android TV or slow network hangs loadItems
+      const safetyTimer = setTimeout(() => {
+        if (isMounted) {
+          setLoading(false);
+          setNotice("Quá thời gian tự động mở khóa. Vui lòng nhập lại key.");
+        }
+      }, 5000);
+
+      loadItems(savedKey).finally(() => {
+        clearTimeout(safetyTimer);
+        if (isMounted) {
+          setLoading(false);
+        }
+      });
     } else {
       setLoading(false);
     }
@@ -1293,9 +1326,11 @@ export default function Home() {
   }, [items, editAttachments, attachmentUrls, accessKey, locked, fileTransport, previewTick]);
 
   async function unlock(event) {
-    event.preventDefault();
+    if (event?.preventDefault) event.preventDefault();
     const key = accessInput.trim();
-    if (!key) return;
+    if (!key || loading) return;
+    setLoading(true);
+    setNotice("");
     setAccessKey(key);
     try { localStorage.setItem(ACCESS_KEY_STORAGE, key); } catch {}
     await loadItems(key);
