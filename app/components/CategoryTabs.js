@@ -45,10 +45,35 @@ export default function CategoryTabs({
   );
   const otherTabs = useMemo(() => categories.slice(1), [categories]);
 
+  const otherTabsRef = useRef(otherTabs);
+  const firstTabRef = useRef(firstTab);
+  const onReorderCategoriesRef = useRef(onReorderCategories);
+
+  otherTabsRef.current = otherTabs;
+  firstTabRef.current = firstTab;
+  onReorderCategoriesRef.current = onReorderCategories;
+
+  const destroySortable = () => {
+    if (sortableRef.current) {
+      const inst = sortableRef.current;
+      sortableRef.current = null;
+      if (inst && inst.el) {
+        try {
+          inst.destroy();
+        } catch (err) {
+          console.warn("Error destroying tab sortable:", err);
+        }
+      }
+    }
+  };
+
   // Initialize SortableJS only on otherTabs container
   useEffect(() => {
     const container = draggableListRef.current;
-    if (!container || otherTabs.length < 1) return;
+    if (!container || otherTabs.length < 1) {
+      destroySortable();
+      return;
+    }
 
     let disposed = false;
 
@@ -57,63 +82,81 @@ export default function CategoryTabs({
       if (disposed) return;
       const Sortable = module.default;
 
-      sortableRef.current = new Sortable(container, {
-        animation: 200,
-        easing: "cubic-bezier(0.25, 1, 0.5, 1)",
-        draggable: ".category-tab-wrapper",
-        ghostClass: "tab-sortable-ghost",
-        chosenClass: "tab-sortable-chosen",
-        fallbackClass: "tab-sortable-fallback",
-        forceFallback: true,
-        fallbackOnBody: true,
-        direction: "horizontal",
-        swapThreshold: 0.65,
-        invertSwap: true,
-        filter: ".category-tab-input-form, .category-tab-inline-input",
-        preventOnFilter: false,
-        fallbackTolerance: 5,
-        delay: 150,
-        delayOnTouchOnly: true,
-        touchStartThreshold: 5,
-        onStart() {
-          isSortingRef.current = true;
-          if (hoverTimerRef.current) {
-            clearTimeout(hoverTimerRef.current);
-            hoverTimerRef.current = null;
+      // Safely cleanup any previous instance
+      destroySortable();
+      if (container) {
+        try {
+          const existing = Sortable.get(container);
+          if (existing && existing.el) {
+            existing.destroy();
           }
-          if (touchTimerRef.current) {
-            clearTimeout(touchTimerRef.current);
-            touchTimerRef.current = null;
-          }
-          setMenuState(null);
-          if (typeof document !== "undefined") {
-            document.body.classList.add("is-sorting-tabs");
-          }
-        },
-        onEnd(evt) {
-          if (typeof document !== "undefined") {
-            document.body.classList.remove("is-sorting-tabs");
-          }
-          setTimeout(() => {
-            isSortingRef.current = false;
-          }, 120);
+        } catch {}
+      }
 
-          if (evt.oldIndex === evt.newIndex || evt.oldIndex == null || evt.newIndex == null) return;
-          const nextOthers = [...otherTabs];
-          const [moved] = nextOthers.splice(evt.oldIndex, 1);
-          nextOthers.splice(evt.newIndex, 0, moved);
-          onReorderCategories?.([firstTab, ...nextOthers]);
-        },
-      });
+      if (disposed || !draggableListRef.current) return;
+
+      try {
+        sortableRef.current = new Sortable(container, {
+          animation: 200,
+          easing: "cubic-bezier(0.25, 1, 0.5, 1)",
+          draggable: ".category-tab-wrapper",
+          ghostClass: "tab-sortable-ghost",
+          chosenClass: "tab-sortable-chosen",
+          fallbackClass: "tab-sortable-fallback",
+          forceFallback: true,
+          fallbackOnBody: true,
+          direction: "horizontal",
+          swapThreshold: 0.65,
+          invertSwap: true,
+          filter: ".category-tab-input-form, .category-tab-inline-input",
+          preventOnFilter: false,
+          fallbackTolerance: 5,
+          delay: 150,
+          delayOnTouchOnly: true,
+          touchStartThreshold: 5,
+          onStart() {
+            isSortingRef.current = true;
+            if (hoverTimerRef.current) {
+              clearTimeout(hoverTimerRef.current);
+              hoverTimerRef.current = null;
+            }
+            if (touchTimerRef.current) {
+              clearTimeout(touchTimerRef.current);
+              touchTimerRef.current = null;
+            }
+            setMenuState(null);
+            if (typeof document !== "undefined") {
+              document.body.classList.add("is-sorting-tabs");
+            }
+          },
+          onEnd(evt) {
+            if (typeof document !== "undefined") {
+              document.body.classList.remove("is-sorting-tabs");
+            }
+            setTimeout(() => {
+              isSortingRef.current = false;
+            }, 120);
+
+            if (evt.oldIndex === evt.newIndex || evt.oldIndex == null || evt.newIndex == null) return;
+            const currentOthers = otherTabsRef.current || [];
+            const nextOthers = [...currentOthers];
+            const [moved] = nextOthers.splice(evt.oldIndex, 1);
+            nextOthers.splice(evt.newIndex, 0, moved);
+            onReorderCategoriesRef.current?.([firstTabRef.current, ...nextOthers]);
+          },
+        });
+      } catch (err) {
+        console.warn("Failed to initialize tab sortable:", err);
+      }
     }
 
     void initSortable();
 
     return () => {
       disposed = true;
-      sortableRef.current?.destroy();
+      destroySortable();
     };
-  }, [otherTabs, firstTab, onReorderCategories]);
+  }, [otherTabs.length > 0]);
 
   // Support horizontal scroll with mouse wheel on the scroll area
   useEffect(() => {

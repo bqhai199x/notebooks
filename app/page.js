@@ -264,8 +264,8 @@ function selectedFileAttachment(file, inline = false) {
   const attachment = {
     id: makeId(),
     kind: isImg ? "image" : (isVid ? "video" : "file"),
-    name: file.name || (isVid ? "video.mp4" : "file"),
-    contentType: file.type || (isVid ? "video/mp4" : "application/octet-stream"),
+    name: file.name || (isImg ? "image.png" : (isVid ? "video.mp4" : "file")),
+    contentType: file.type || (isImg ? "image/png" : (isVid ? "video/mp4" : "application/octet-stream")),
     size: file.size,
     file,
     ...(inline ? { _inline: true } : {}),
@@ -904,11 +904,39 @@ export default function Home() {
     let disposed = false;
     let sortable = null;
 
+    const destroySortable = () => {
+      if (sortable) {
+        const inst = sortable;
+        sortable = null;
+        if (inst && inst.el) {
+          try {
+            inst.destroy();
+          } catch (err) {
+            console.warn("Error destroying items sortable:", err);
+          }
+        }
+      }
+    };
+
     async function attachSortable() {
       const module = await import("sortablejs");
       if (disposed) return;
 
       const Sortable = module.default;
+
+      // Safely cleanup any previous instance attached to container
+      destroySortable();
+      if (container) {
+        try {
+          const existing = Sortable.get(container);
+          if (existing && existing.el) {
+            existing.destroy();
+          }
+        } catch {}
+      }
+
+      if (disposed || !itemsListRef.current) return;
+
       let lastClientX = 0;
       let lastClientY = 0;
       let currentDragOverTabEl = null;
@@ -942,73 +970,77 @@ export default function Home() {
         }
       };
 
-      sortable = new Sortable(container, {
-        animation: 150,
-        draggable: ".item-card[data-item-id]",
-        handle: ".item-drag-handle",
-        ghostClass: "item-card-sortable-ghost",
-        chosenClass: "item-card-sortable-chosen",
-        dragClass: "item-card-sortable-drag",
-        fallbackClass: "item-card-sortable-fallback",
-        forceFallback: true,
-        fallbackOnBody: true,
-        delay: 120,
-        delayOnTouchOnly: true,
-        touchStartThreshold: 4,
-        onStart() {
-          document.body.classList.add("is-dragging-item");
-          window.addEventListener("pointermove", handlePointerMove);
-          window.addEventListener("touchmove", handleTouchMove, { passive: true });
-        },
-        onMove(evt, originalEvent) {
-          if (originalEvent) {
-            const x = originalEvent.clientX ?? originalEvent.touches?.[0]?.clientX ?? 0;
-            const y = originalEvent.clientY ?? originalEvent.touches?.[0]?.clientY ?? 0;
-            updateDragTarget(x, y);
-          }
-          // Prevent swapping notes in list if dragging over header tabs
-          if (currentDragOverTabEl) {
-            return false;
-          }
-        },
-        onEnd(event) {
-          document.body.classList.remove("is-dragging-item");
-          window.removeEventListener("pointermove", handlePointerMove);
-          window.removeEventListener("touchmove", handleTouchMove);
-          if (currentDragOverTabEl) {
-            currentDragOverTabEl.classList.remove("is-drag-over");
-            currentDragOverTabEl = null;
-          }
+      try {
+        sortable = new Sortable(container, {
+          animation: 150,
+          draggable: ".item-card[data-item-id]",
+          handle: ".item-drag-handle",
+          ghostClass: "item-card-sortable-ghost",
+          chosenClass: "item-card-sortable-chosen",
+          dragClass: "item-card-sortable-drag",
+          fallbackClass: "item-card-sortable-fallback",
+          forceFallback: true,
+          fallbackOnBody: true,
+          delay: 120,
+          delayOnTouchOnly: true,
+          touchStartThreshold: 4,
+          onStart() {
+            document.body.classList.add("is-dragging-item");
+            window.addEventListener("pointermove", handlePointerMove);
+            window.addEventListener("touchmove", handleTouchMove, { passive: true });
+          },
+          onMove(evt, originalEvent) {
+            if (originalEvent) {
+              const x = originalEvent.clientX ?? originalEvent.touches?.[0]?.clientX ?? 0;
+              const y = originalEvent.clientY ?? originalEvent.touches?.[0]?.clientY ?? 0;
+              updateDragTarget(x, y);
+            }
+            // Prevent swapping notes in list if dragging over header tabs
+            if (currentDragOverTabEl) {
+              return false;
+            }
+          },
+          onEnd(event) {
+            document.body.classList.remove("is-dragging-item");
+            window.removeEventListener("pointermove", handlePointerMove);
+            window.removeEventListener("touchmove", handleTouchMove);
+            if (currentDragOverTabEl) {
+              currentDragOverTabEl.classList.remove("is-drag-over");
+              currentDragOverTabEl = null;
+            }
 
-          const itemId = event.item?.dataset.itemId;
-          if (!itemId) return;
+            const itemId = event.item?.dataset.itemId;
+            if (!itemId) return;
 
-          // Check if dropped onto a tab
-          const orig = event.originalEvent;
-          const x = orig?.clientX ?? orig?.changedTouches?.[0]?.clientX ?? lastClientX;
-          const y = orig?.clientY ?? orig?.changedTouches?.[0]?.clientY ?? lastClientY;
-          const dropTarget = document.elementFromPoint(x, y)?.closest("[data-tab-id]");
-          const targetTabId = dropTarget?.dataset?.tabId;
-          if (targetTabId && targetTabId !== activeTabId) {
-            setTimeout(() => {
-              void moveItemToCategory(itemId, targetTabId);
-            }, 50);
-            return;
-          }
+            // Check if dropped onto a tab
+            const orig = event.originalEvent;
+            const x = orig?.clientX ?? orig?.changedTouches?.[0]?.clientX ?? lastClientX;
+            const y = orig?.clientY ?? orig?.changedTouches?.[0]?.clientY ?? lastClientY;
+            const dropTarget = document.elementFromPoint(x, y)?.closest("[data-tab-id]");
+            const targetTabId = dropTarget?.dataset?.tabId;
+            if (targetTabId && targetTabId !== activeTabId) {
+              setTimeout(() => {
+                void moveItemToCategory(itemId, targetTabId);
+              }, 50);
+              return;
+            }
 
-          if (visibleItems.length < 2) return;
-          const orderedIds = Array.from(container.querySelectorAll(".item-card[data-item-id]"))
-            .map((element) => element.dataset.itemId)
-            .filter(Boolean);
-          if (itemId) void persistItemOrder(itemId, orderedIds);
-        },
-      });
+            if (visibleItems.length < 2) return;
+            const orderedIds = Array.from(container.querySelectorAll(".item-card[data-item-id]"))
+              .map((element) => element.dataset.itemId)
+              .filter(Boolean);
+            if (itemId) void persistItemOrder(itemId, orderedIds);
+          },
+        });
+      } catch (err) {
+        console.warn("Failed to initialize items sortable:", err);
+      }
     }
 
     void attachSortable();
     return () => {
       disposed = true;
-      sortable?.destroy();
+      destroySortable();
     };
   }, [locked, visibleItems.length, activeTabId, editingId, saving, reordering]);
 
@@ -1937,16 +1969,39 @@ export default function Home() {
       }
     };
 
+    const handleWindowPaste = (e) => {
+      if (locked) return;
+      const target = e.target;
+      if (
+        target instanceof HTMLElement &&
+        (target.isContentEditable ||
+          target.tagName === "INPUT" ||
+          target.tagName === "TEXTAREA" ||
+          target.closest(".ql-editor") ||
+          target.closest(".rich-text"))
+      ) {
+        return;
+      }
+
+      const files = Array.from(e.clipboardData?.files || []);
+      if (files.length > 0) {
+        e.preventDefault();
+        handleAddFiles(files);
+      }
+    };
+
     window.addEventListener("dragenter", handleDragEnter);
     window.addEventListener("dragover", handleDragOver);
     window.addEventListener("dragleave", handleDragLeave);
     window.addEventListener("drop", handleDrop);
+    window.addEventListener("paste", handleWindowPaste);
 
     return () => {
       window.removeEventListener("dragenter", handleDragEnter);
       window.removeEventListener("dragover", handleDragOver);
       window.removeEventListener("dragleave", handleDragLeave);
       window.removeEventListener("drop", handleDrop);
+      window.removeEventListener("paste", handleWindowPaste);
     };
   }, [locked, editingId, editAttachments, pending]);
 

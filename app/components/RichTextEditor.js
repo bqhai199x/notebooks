@@ -375,8 +375,17 @@ export default function RichTextEditor({
         return newDelta;
       });
 
-      // Smart link: when user pastes a URL (single URL or onto selected text)
+      // Smart link: when user pastes a URL (single URL or onto selected text), or pasted image handling
       handlePaste = (event) => {
+        const imageFiles = Array.from(event.clipboardData?.files || []).filter((f) => f.type?.startsWith("image/"));
+        if (imageFiles.length > 0) {
+          event.preventDefault();
+          event.stopPropagation();
+          const range = editor.getSelection(true) || { index: editor.getLength(), length: 0 };
+          void insertImages(range, imageFiles);
+          return;
+        }
+
         if (event.clipboardData?.files?.length > 0) return;
         const pastedText = event.clipboardData?.getData("text/plain");
         if (!pastedText) return;
